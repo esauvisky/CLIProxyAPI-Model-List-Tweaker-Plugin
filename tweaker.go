@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,7 +53,6 @@ type modelRule struct {
 	ID          string `yaml:"id" json:"id"`
 	NewID       string `yaml:"new_id,omitempty" json:"new_id,omitempty"`
 	DisplayName string `yaml:"display_name,omitempty" json:"display_name,omitempty"`
-	Provider    string `yaml:"provider,omitempty" json:"provider,omitempty"`
 	Hidden      bool   `yaml:"hidden,omitempty" json:"hidden,omitempty"`
 }
 
@@ -68,24 +66,21 @@ func (r *modelRule) UnmarshalYAML(value *yaml.Node) error {
 	}
 	var raw struct {
 		ID          string `yaml:"id"`
-		Match       string `yaml:"match"`
 		NewID       string `yaml:"new_id"`
 		NewIDDash   string `yaml:"new-id"`
 		Alias       string `yaml:"alias"`
 		DisplayName string `yaml:"display_name"`
 		DisplayDash string `yaml:"display-name"`
 		Name        string `yaml:"name"`
-		Provider    string `yaml:"provider"`
 		Hidden      bool   `yaml:"hidden"`
 		Hide        bool   `yaml:"hide"`
 	}
 	if err := value.Decode(&raw); err != nil {
 		return err
 	}
-	r.ID = firstNonEmpty(raw.ID, raw.Match)
+	r.ID = strings.TrimSpace(raw.ID)
 	r.NewID = firstNonEmpty(raw.NewID, raw.NewIDDash, raw.Alias)
 	r.DisplayName = firstNonEmpty(raw.DisplayName, raw.DisplayDash, raw.Name)
-	r.Provider = strings.TrimSpace(raw.Provider)
 	r.Hidden = raw.Hidden || raw.Hide
 	return nil
 }
@@ -105,34 +100,29 @@ func (r *modelRule) UnmarshalJSON(data []byte) error {
 	}
 	var raw struct {
 		ID          string `json:"id"`
-		Match       string `json:"match"`
 		NewID       string `json:"new_id"`
 		NewIDDash   string `json:"new-id"`
 		Alias       string `json:"alias"`
 		DisplayName string `json:"display_name"`
 		DisplayDash string `json:"display-name"`
 		Name        string `json:"name"`
-		Provider    string `json:"provider"`
 		Hidden      bool   `json:"hidden"`
 		Hide        bool   `json:"hide"`
 	}
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
-	r.ID = firstNonEmpty(raw.ID, raw.Match)
+	r.ID = strings.TrimSpace(raw.ID)
 	r.NewID = firstNonEmpty(raw.NewID, raw.NewIDDash, raw.Alias)
 	r.DisplayName = firstNonEmpty(raw.DisplayName, raw.DisplayDash, raw.Name)
-	r.Provider = strings.TrimSpace(raw.Provider)
 	r.Hidden = raw.Hidden || raw.Hide
 	return nil
 }
 
 type pluginConfig struct {
-	Enabled      bool        `yaml:"enabled" json:"enabled"`
-	Priority     int         `yaml:"priority" json:"priority"`
-	HideUnlisted bool        `yaml:"hide_unlisted" json:"hide_unlisted"`
-	Hide         []string    `yaml:"hide" json:"hide"`
-	Models       []modelRule `yaml:"models" json:"models"`
+	Enabled  bool        `yaml:"enabled" json:"enabled"`
+	Priority int         `yaml:"priority" json:"priority"`
+	Models   []modelRule `yaml:"models" json:"models"`
 }
 
 type compiledConfig struct {
@@ -149,23 +139,24 @@ type observedModelMeta struct {
 var (
 	activeConfig atomic.Value
 
-	observedMu     sync.RWMutex
-	observedModels = make(map[string]observedModelMeta)
+	observedMu            sync.RWMutex
+	observedModels        = make(map[string]observedModelMeta)
+	lastClaudeCloakingSet atomic.Bool
+	lastClaudeCloakingVal atomic.Bool
 
 	hostModelsResolver = fetchHostAuthModels
 )
 
 func init() {
+	lastClaudeCloakingVal.Store(true)
 	activeConfig.Store(compileConfig(defaultPluginConfig()))
 }
 
 func defaultPluginConfig() pluginConfig {
 	return pluginConfig{
-		Enabled:      true,
-		Priority:     100,
-		HideUnlisted: false,
-		Hide:         []string{},
-		Models:       []modelRule{},
+		Enabled:  true,
+		Priority: 100,
+		Models:   []modelRule{},
 	}
 }
 
@@ -176,7 +167,6 @@ func compileConfig(cfg pluginConfig) compiledConfig {
 		rule.ID = strings.TrimSpace(rule.ID)
 		rule.NewID = strings.TrimSpace(rule.NewID)
 		rule.DisplayName = strings.TrimSpace(rule.DisplayName)
-		rule.Provider = strings.ToLower(strings.TrimSpace(rule.Provider))
 		if rule.ID == "" {
 			continue
 		}
@@ -186,14 +176,7 @@ func compileConfig(cfg pluginConfig) compiledConfig {
 			aliasToTarget[strings.ToLower(rule.NewID)] = rule
 		}
 	}
-	cleanedHide := make([]string, 0, len(cfg.Hide))
-	for _, pattern := range cfg.Hide {
-		if trimmed := strings.TrimSpace(pattern); trimmed != "" {
-			cleanedHide = append(cleanedHide, trimmed)
-		}
-	}
 	cfg.Models = cleanedModels
-	cfg.Hide = cleanedHide
 	return compiledConfig{
 		raw:           cfg,
 		aliasToTarget: aliasToTarget,
@@ -232,22 +215,10 @@ func configurePlugin(raw []byte) error {
 
 func decodePluginConfigYAML(rawYAML []byte) (pluginConfig, error) {
 	cfg := defaultPluginConfig()
-	var node yaml.Node
-	if errUnmarshal := yaml.Unmarshal(rawYAML, &node); errUnmarshal != nil {
+	if errUnmarshal := yaml.Unmarshal(rawYAML, &cfg); errUnmarshal != nil {
 		return pluginConfig{}, errUnmarshal
 	}
-	if errDecode := node.Decode(&cfg); errDecode != nil {
-		return pluginConfig{}, errDecode
-	}
-	var dash checkDashFields
-	if errDash := node.Decode(&dash); errDash == nil && dash.HideUnlisted != nil {
-		cfg.HideUnlisted = *dash.HideUnlisted
-	}
 	return cfg, nil
-}
-
-type checkDashFields struct {
-	HideUnlisted *bool `yaml:"hide-unlisted"`
 }
 
 func pluginRegistration() registration {
@@ -263,19 +234,7 @@ func pluginRegistration() registration {
 					Name:        "models",
 					Type:        "array",
 					Default:     []any{},
-					Description: "Ordered list of model rules ({id, new_id, display_name, provider, hidden}) or model IDs.",
-				},
-				{
-					Name:        "hide",
-					Type:        "array",
-					Default:     []any{},
-					Description: "Model IDs, display names, or glob patterns (e.g. gpt-4o-mini*, *-preview) to hide from the global model list.",
-				},
-				{
-					Name:        "hide_unlisted",
-					Type:        "boolean",
-					Default:     false,
-					Description: "When true, hide any model not explicitly listed in models.",
+					Description: "Ordered list of model rules ({id, new_id, display_name, hidden}).",
 				},
 			},
 		},
@@ -400,12 +359,12 @@ func handleModelRoute(raw []byte) ([]byte, error) {
 	if !compiled.raw.Enabled || len(compiled.aliasToTarget) == 0 {
 		return okEnvelope(modelRouteResponse{Handled: false})
 	}
-	rule, targetModel, matched := resolveAliasModel(req.RequestedModel, compiled)
+	_, targetModel, matched := resolveAliasModel(req.RequestedModel, compiled)
 	if !matched {
 		return okEnvelope(modelRouteResponse{Handled: false})
 	}
 	baseOriginal, _, _ := splitThinkingSuffix(targetModel)
-	provider := resolveProviderForModel(baseOriginal, rule.Provider, req.AvailableProviders, req.HostCallbackID)
+	provider := resolveProviderForModel(baseOriginal, req.AvailableProviders, req.HostCallbackID)
 	if provider == "" {
 		return okEnvelope(modelRouteResponse{Handled: false})
 	}
@@ -482,10 +441,7 @@ func rewriteRequestBodyModel(body []byte, requestedModel string, compiled compil
 	return updated, true
 }
 
-func resolveProviderForModel(modelID, configuredProvider string, availableProviders []string, hostCallbackID string) string {
-	if configuredProvider != "" && isProviderAvailable(configuredProvider, availableProviders) {
-		return configuredProvider
-	}
+func resolveProviderForModel(modelID string, availableProviders []string, hostCallbackID string) string {
 	if credentials, errFetch := hostModelsResolver(hostCallbackID); errFetch == nil {
 		for _, cred := range credentials {
 			prov := strings.ToLower(strings.TrimSpace(cred.Provider))
@@ -509,9 +465,6 @@ func resolveProviderForModel(modelID, configuredProvider string, availableProvid
 	}
 	if prov := inferProviderFromModelID(modelID, availableProviders); prov != "" {
 		return prov
-	}
-	if configuredProvider != "" {
-		return configuredProvider
 	}
 	if len(availableProviders) == 1 {
 		return strings.ToLower(strings.TrimSpace(availableProviders[0]))
@@ -618,12 +571,16 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 
 	recordObservedModels(items)
 
-	if len(cfg.Models) == 0 && len(cfg.Hide) == 0 && !cfg.HideUnlisted {
-		return nil, false
-	}
-
 	isClaudeFormat := strings.EqualFold(strings.TrimSpace(sourceFormat), "claude") || hasClaudePaginationFields(root)
 	claudeCloakingActive := detectClaudeCloaking(items, isClaudeFormat)
+	if isClaudeFormat {
+		lastClaudeCloakingSet.Store(true)
+		lastClaudeCloakingVal.Store(claudeCloakingActive)
+	}
+
+	if len(cfg.Models) == 0 {
+		return nil, false
+	}
 
 	matchedRuleIdx := make([]int, len(items))
 	for i := range matchedRuleIdx {
@@ -638,7 +595,7 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 			}
 			if matchesRule(item, rule.ID) {
 				matchedRuleIdx[itemIdx] = ruleIdx
-				if !rule.Hidden && !matchesExactHide(item, cfg.Hide) {
+				if !rule.Hidden {
 					ordered = append(ordered, applyRuleToItem(item, rule, isClaudeFormat, claudeCloakingActive))
 				}
 				break
@@ -646,22 +603,17 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 		}
 	}
 
-	if !cfg.HideUnlisted {
-		for itemIdx, item := range items {
-			if matchedRuleIdx[itemIdx] != -1 {
-				continue
-			}
-			if matchesAnyHidePattern(item, cfg.Hide) {
-				continue
-			}
-			if isClaudeFormat && claudeCloakingActive {
-				item = cloneMap(item)
-				if id, ok := item["id"].(string); ok && id != "" {
-					item["id"] = ensureClaudeModelIDPrefix(id)
-				}
-			}
-			ordered = append(ordered, item)
+	for itemIdx, item := range items {
+		if matchedRuleIdx[itemIdx] != -1 {
+			continue
 		}
+		if isClaudeFormat && claudeCloakingActive {
+			item = cloneMap(item)
+			if id, ok := item["id"].(string); ok && id != "" {
+				item["id"] = ensureClaudeModelIDPrefix(id)
+			}
+		}
+		ordered = append(ordered, item)
 	}
 
 	if listKey == "models" {
@@ -750,46 +702,6 @@ func matchesRule(item map[string]any, target string) bool {
 		if candidate == target || candidate == targetUncloaked || strings.EqualFold(candidate, target) || strings.EqualFold(candidate, targetUncloaked) {
 			return true
 		}
-		if hasGlobMeta(target) && matchGlob(target, candidate) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchesExactHide(item map[string]any, hidePatterns []string) bool {
-	canonicalID, rawID, displayName := extractItemIdentifiers(item)
-	for _, pattern := range hidePatterns {
-		pattern = strings.TrimSpace(pattern)
-		if pattern == "" || hasGlobMeta(pattern) {
-			continue
-		}
-		uncloaked := resolveClaudeModelIDPrefix(strings.TrimPrefix(pattern, "models/"))
-		for _, candidate := range []string{canonicalID, rawID, displayName} {
-			if candidate != "" && (strings.EqualFold(candidate, pattern) || strings.EqualFold(candidate, uncloaked)) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func matchesAnyHidePattern(item map[string]any, hidePatterns []string) bool {
-	canonicalID, rawID, displayName := extractItemIdentifiers(item)
-	for _, pattern := range hidePatterns {
-		pattern = strings.TrimSpace(pattern)
-		if pattern == "" {
-			continue
-		}
-		uncloaked := resolveClaudeModelIDPrefix(strings.TrimPrefix(pattern, "models/"))
-		for _, candidate := range []string{canonicalID, rawID, displayName} {
-			if candidate == "" {
-				continue
-			}
-			if strings.EqualFold(candidate, pattern) || strings.EqualFold(candidate, uncloaked) || matchGlob(pattern, candidate) || matchGlob(uncloaked, candidate) {
-				return true
-			}
-		}
 	}
 	return false
 }
@@ -827,13 +739,13 @@ func applyRuleToItem(item map[string]any, rule modelRule, isClaudeFormat, claude
 				out["name"] = newID
 			}
 		} else {
-			if isClaudeFormat && (claudeCloakingActive || strings.HasPrefix(rawID, claudeDDModelPrefix)) {
+			if isClaudeFormat && claudeCloakingActive {
 				out["id"] = ensureClaudeModelIDPrefix(newID)
 			} else {
 				out["id"] = newID
 			}
 		}
-	} else if isClaudeFormat && (claudeCloakingActive || strings.HasPrefix(rawID, claudeDDModelPrefix)) {
+	} else if isClaudeFormat && claudeCloakingActive {
 		if id, ok := out["id"].(string); ok && id != "" {
 			out["id"] = ensureClaudeModelIDPrefix(id)
 		}
@@ -862,17 +774,16 @@ func detectClaudeCloaking(items []map[string]any, isClaudeFormat bool) bool {
 	if !isClaudeFormat {
 		return false
 	}
-	hasNonClaudeUncloaked := false
 	for _, item := range items {
 		id, _ := item["id"].(string)
 		if strings.HasPrefix(id, claudeDDModelPrefix) {
 			return true
 		}
 		if id != "" && !strings.HasPrefix(id, "claude-") {
-			hasNonClaudeUncloaked = true
+			return false
 		}
 	}
-	return !hasNonClaudeUncloaked
+	return true
 }
 
 func reindexCodexPriorities(items []map[string]any) {
@@ -892,10 +803,7 @@ func reindexCodexPriorities(items []map[string]any) {
 }
 
 func ensureClaudeModelIDPrefix(id string) string {
-	if id == "" {
-		return id
-	}
-	if strings.HasPrefix(id, claudeDDModelPrefix) {
+	if id == "" || strings.HasPrefix(id, claudeDDModelPrefix) {
 		return id
 	}
 	return claudeDDModelPrefix + reverseString(id)
@@ -934,44 +842,6 @@ func reverseString(s string) string {
 		runes[i], runes[j] = runes[j], runes[i]
 	}
 	return string(runes)
-}
-
-func hasGlobMeta(pattern string) bool {
-	return strings.ContainsAny(pattern, "*?[]")
-}
-
-func matchGlob(pattern, candidate string) bool {
-	matched, err := path.Match(strings.ToLower(pattern), strings.ToLower(candidate))
-	if err == nil && matched {
-		return true
-	}
-	if strings.Contains(pattern, "*") {
-		return wildcardMatch(strings.ToLower(pattern), strings.ToLower(candidate))
-	}
-	return false
-}
-
-func wildcardMatch(pattern, str string) bool {
-	parts := strings.Split(pattern, "*")
-	if len(parts) == 1 {
-		return pattern == str
-	}
-	if !strings.HasPrefix(str, parts[0]) {
-		return false
-	}
-	str = str[len(parts[0]):]
-	for i := 1; i < len(parts)-1; i++ {
-		if parts[i] == "" {
-			continue
-		}
-		idx := strings.Index(str, parts[i])
-		if idx < 0 {
-			return false
-		}
-		str = str[idx+len(parts[i]):]
-	}
-	last := parts[len(parts)-1]
-	return strings.HasSuffix(str, last)
 }
 
 func cloneMap(src map[string]any) map[string]any {

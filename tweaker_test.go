@@ -10,8 +10,6 @@ func TestTransformCatalogBody_ClaudeCloakedReorderRenameAndHide(t *testing.T) {
 	cfgYAML := []byte(`
 enabled: true
 priority: 100
-hide:
-  - "gpt-4o-mini*"
 models:
   - id: "gpt-5.4"
     new_id: "codex-5.4"
@@ -19,6 +17,8 @@ models:
   - id: "claude-opus-4-7"
     display_name: "2. Claude Opus 4.7"
   - id: "claude-haiku-4-5"
+    hidden: true
+  - id: "gpt-4o-mini"
     hidden: true
 `)
 	cfg, errDecode := decodePluginConfigYAML(cfgYAML)
@@ -60,23 +60,57 @@ models:
 		t.Fatalf("len(data) = %d, want 3; body = %s", len(parsed.Data), string(out))
 	}
 
-	// First model: gpt-5.4 renamed to codex-5.4, cloaked as claude-fable-5-dd-4.5-xedoc
 	wantFirstID := ensureClaudeModelIDPrefix("codex-5.4")
 	if parsed.Data[0].ID != wantFirstID || parsed.Data[0].DisplayName != "1. Codex 5.4" {
 		t.Fatalf("data[0] = %+v, want id=%q display_name=%q", parsed.Data[0], wantFirstID, "1. Codex 5.4")
 	}
-	// Second model: claude-opus-4-7 (cloaked so Claude Code does not split it below Sonnet/Haiku)
 	wantSecondID := ensureClaudeModelIDPrefix("claude-opus-4-7")
 	if parsed.Data[1].ID != wantSecondID || parsed.Data[1].DisplayName != "2. Claude Opus 4.7" {
 		t.Fatalf("data[1] = %+v, want id=%q", parsed.Data[1], wantSecondID)
 	}
-	// Third model: unlisted claude-sonnet-4-6 preserved at the end (also cloaked)
 	wantThirdID := ensureClaudeModelIDPrefix("claude-sonnet-4-6")
 	if parsed.Data[2].ID != wantThirdID {
 		t.Fatalf("data[2] = %+v, want %q", parsed.Data[2], wantThirdID)
 	}
 	if parsed.FirstID != wantFirstID || parsed.LastID != wantThirdID {
 		t.Fatalf("pagination IDs = (%q, %q), want (%q, %q)", parsed.FirstID, parsed.LastID, wantFirstID, wantThirdID)
+	}
+}
+
+func TestTransformCatalogBody_FollowsDisabledCloaking(t *testing.T) {
+	cfg := pluginConfig{
+		Enabled: true,
+		Models: []modelRule{
+			{ID: "gpt-5.4", DisplayName: "GPT 5.4"},
+			{ID: "claude-opus-4-7", DisplayName: "Opus 4.7"},
+		},
+	}
+
+	input := `{
+		"data": [
+			{"id": "claude-opus-4-7", "display_name": "Claude Opus 4.7", "object": "model"},
+			{"id": "gpt-5.4", "display_name": "GPT 5.4", "object": "model"}
+		],
+		"first_id": "claude-opus-4-7",
+		"has_more": false,
+		"last_id": "gpt-5.4"
+	}`
+
+	out, changed := transformCatalogBody("claude", []byte(input), cfg)
+	if !changed {
+		t.Fatal("expected catalog to be transformed")
+	}
+
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.Data[0].ID != "gpt-5.4" || parsed.Data[1].ID != "claude-opus-4-7" {
+		t.Fatalf("expected uncloaked IDs when global cloaking is disabled, got %+v", parsed.Data)
 	}
 }
 

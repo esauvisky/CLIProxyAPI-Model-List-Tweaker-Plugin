@@ -52,8 +52,9 @@ type discoveredModel struct {
 }
 
 type uiStatePayload struct {
-	Config    pluginConfig      `json:"config"`
-	Available []discoveredModel `json:"available"`
+	Config         pluginConfig      `json:"config"`
+	Available      []discoveredModel `json:"available"`
+	ClaudeCloaking bool              `json:"claude_cloaking"`
 }
 
 func managementRegistrationPayload() managementRegistration {
@@ -199,8 +200,9 @@ func buildUIState(hostCallbackID string) uiStatePayload {
 	})
 
 	return uiStatePayload{
-		Config:    compiled.raw,
-		Available: available,
+		Config:         compiled.raw,
+		Available:      available,
+		ClaudeCloaking: lastClaudeCloakingVal.Load(),
 	}
 }
 
@@ -262,7 +264,7 @@ const editorHTMLTemplate = `<!doctype html>
     color: var(--text);
     line-height: 1.45;
   }
-  .container { max-width: 1280px; margin: 0 auto; }
+  .container { max-width: 1320px; margin: 0 auto; }
   header {
     display: flex;
     flex-wrap: wrap;
@@ -310,7 +312,7 @@ const editorHTMLTemplate = `<!doctype html>
   }
   .grid {
     display: grid;
-    grid-template-columns: 2fr 1fr;
+    grid-template-columns: 1.65fr 1fr;
     gap: 20px;
   }
   @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
@@ -341,7 +343,7 @@ const editorHTMLTemplate = `<!doctype html>
   }
   th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
   tr.dragging { opacity: 0.45; }
-  tr.hidden-row { opacity: 0.55; }
+  tr.hidden-row { opacity: 0.5; }
   .drag-handle {
     cursor: grab;
     color: var(--muted);
@@ -357,7 +359,11 @@ const editorHTMLTemplate = `<!doctype html>
     background: var(--panel-alt);
     border: 1px solid var(--border);
     color: var(--muted);
-    margin-right: 4px;
+    margin-left: 6px;
+  }
+  .badge.builtin {
+    border-color: #475569;
+    color: #cbd5e1;
   }
   .status-bar {
     padding: 10px 14px;
@@ -370,30 +376,25 @@ const editorHTMLTemplate = `<!doctype html>
   .status-bar.err { display: block; background: rgba(239,68,68,0.15); border: 1px solid var(--danger); color: #fca5a5; }
   .preview-list {
     list-style: decimal;
-    padding-left: 22px;
+    padding-left: 26px;
     margin: 0;
-    font-size: 0.85rem;
+    font-size: 0.84rem;
   }
   .preview-list li {
     padding: 6px 4px;
     border-bottom: 1px solid rgba(51,65,85,0.5);
   }
+  .preview-list li.builtin-item {
+    color: #94a3b8;
+  }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
   .muted { color: var(--muted); }
-  .row-actions { display: flex; gap: 4px; }
   .top-controls {
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
     align-items: center;
     margin-bottom: 12px;
-  }
-  label.checkbox {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.85rem;
-    cursor: pointer;
   }
 </style>
 </head>
@@ -402,11 +403,11 @@ const editorHTMLTemplate = `<!doctype html>
   <header>
     <div>
       <h1>Model List Tweaker</h1>
-      <div class="subtitle">Reorder, rename (ID &amp; Display Name), and hide models across Claude Code (<code>/model</code>), OpenAI, Codex, Gemini, and Grok.</div>
+      <div class="subtitle">Drag to reorder, rename ID or Display Name, and toggle Hide for the global model catalog.</div>
     </div>
     <div class="toolbar">
       <input type="password" id="mgmtKey" placeholder="Management Key (auto-detected if logged in)" style="width: 250px;">
-      <button onclick="refreshFromServer()">Refresh Models</button>
+      <button onclick="refreshFromServer()">Refresh</button>
       <button class="primary" onclick="saveConfig()">Save Configuration</button>
     </div>
   </header>
@@ -417,67 +418,31 @@ const editorHTMLTemplate = `<!doctype html>
     <div>
       <div class="card">
         <h2>
-          <span>Ordered Model Rules</span>
-          <div class="toolbar">
-            <button class="sm" onclick="populateAllAvailable()">+ Add All Active Models</button>
-            <button class="sm" onclick="addBlankRule()">+ Add Custom Rule</button>
-          </div>
+          <span>Model List</span>
+          <button class="sm" onclick="addBlankRule()">+ Add Custom Model</button>
         </h2>
         <div class="top-controls">
-          <input type="text" id="filterInput" placeholder="Filter rules by ID or display name..." oninput="renderRulesTable()" style="max-width: 320px;">
-          <label class="checkbox">
-            <input type="checkbox" id="hideUnlisted" onchange="syncStateFromInputs()">
-            Hide models not listed in this table (<code>hide_unlisted</code>)
-          </label>
+          <input type="text" id="filterInput" placeholder="Filter models..." oninput="renderRulesTable()" style="max-width: 320px;">
         </div>
         <table>
           <thead>
             <tr>
-              <th style="width:36px;">#</th>
-              <th>Match Model ID</th>
-              <th>New ID (Optional Alias)</th>
+              <th style="width:44px;">#</th>
+              <th>Model ID</th>
+              <th>New ID (Optional)</th>
               <th>Display Name (Optional)</th>
-              <th style="width:70px;">Hide</th>
-              <th style="width:120px;">Order / Remove</th>
+              <th style="width:64px;text-align:center;">Hide</th>
             </tr>
           </thead>
           <tbody id="rulesBody"></tbody>
-        </table>
-      </div>
-
-      <div class="card">
-        <h2>
-          <span>Active Unlisted Models (<span id="unlistedCount">0</span>)</span>
-          <span class="muted" style="font-size:0.8rem;font-weight:normal;">Click "+ Pin" to move a model into the ordered list or "Hide" to exclude it</span>
-        </h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Model ID</th>
-              <th>Default Display Name</th>
-              <th>Providers</th>
-              <th style="width:140px;">Action</th>
-            </tr>
-          </thead>
-          <tbody id="availableBody"></tbody>
         </table>
       </div>
     </div>
 
     <div>
       <div class="card">
-        <h2>Global Hide Patterns</h2>
-        <div class="subtitle" style="margin-bottom:8px;">One model ID or wildcard pattern per line (e.g. <code>gpt-4o-mini*</code>, <code>*-preview</code>).</div>
-        <textarea id="hidePatterns" rows="5" class="mono" oninput="syncStateFromInputs()" placeholder="gpt-4o-mini*&#10;*-legacy"></textarea>
-      </div>
-
-      <div class="card">
         <h2>
-          <span>Live Final Order Preview</span>
-          <label class="checkbox" style="font-weight:normal;font-size:0.78rem;">
-            <input type="checkbox" id="previewClaudeCloak" checked onchange="renderPreview()">
-            Claude <code>/model</code> cloaking
-          </label>
+          <span>Final Order Preview (Claude <code>/model</code>)</span>
         </h2>
         <ol id="previewList" class="preview-list"></ol>
       </div>
@@ -487,7 +452,7 @@ const editorHTMLTemplate = `<!doctype html>
           <span>YAML Snippet (<code>config.yaml</code>)</span>
           <button class="sm" onclick="copyYAML()">Copy YAML</button>
         </h2>
-        <textarea id="yamlPreview" rows="12" class="mono" readonly></textarea>
+        <textarea id="yamlPreview" rows="14" class="mono" readonly></textarea>
       </div>
     </div>
   </div>
@@ -516,35 +481,40 @@ function detectStoredManagementKey() {
 }
 
 function initUI() {
-  if (!state.config) state.config = { enabled: true, priority: 100, hide_unlisted: false, hide: [], models: [] };
+  if (!state.config) state.config = { enabled: true, priority: 100, models: [] };
   if (!Array.isArray(state.config.models)) state.config.models = [];
-  if (!Array.isArray(state.config.hide)) state.config.hide = [];
   if (!Array.isArray(state.available)) state.available = [];
 
+  const existing = new Set(state.config.models.map(r => (r.id || '').toLowerCase()));
+  for (const item of state.available) {
+    if (!existing.has(item.id.toLowerCase())) {
+      state.config.models.push({
+        id: item.id,
+        new_id: '',
+        display_name: '',
+        hidden: false
+      });
+      existing.add(item.id.toLowerCase());
+    }
+  }
+
   const detectedKey = detectStoredManagementKey();
-  if (detectedKey) document.getElementById('mgmtKey').value = detectedKey;
+  if (detectedKey && !document.getElementById('mgmtKey').value) {
+    document.getElementById('mgmtKey').value = detectedKey;
+  }
 
-  document.getElementById('hideUnlisted').checked = !!state.config.hide_unlisted;
-  document.getElementById('hidePatterns').value = state.config.hide.join('\n');
   renderAll();
-}
-
-function syncStateFromInputs() {
-  state.config.hide_unlisted = document.getElementById('hideUnlisted').checked;
-  state.config.hide = document.getElementById('hidePatterns').value
-    .split('\n')
-    .map(s => s.trim())
-    .filter(Boolean);
-  renderAvailableTable();
-  renderPreview();
-  renderYAML();
 }
 
 function renderAll() {
   renderRulesTable();
-  renderAvailableTable();
   renderPreview();
   renderYAML();
+}
+
+function defaultDisplayNameFor(id) {
+  const found = state.available.find(a => a.id.toLowerCase() === (id || '').toLowerCase());
+  return found && found.display_name ? found.display_name : id;
 }
 
 function renderRulesTable() {
@@ -553,7 +523,8 @@ function renderRulesTable() {
   tbody.innerHTML = '';
 
   state.config.models.forEach((rule, idx) => {
-    const text = ((rule.id || '') + ' ' + (rule.new_id || '') + ' ' + (rule.display_name || '')).toLowerCase();
+    const defName = defaultDisplayNameFor(rule.id);
+    const text = ((rule.id || '') + ' ' + (rule.new_id || '') + ' ' + (rule.display_name || '') + ' ' + defName).toLowerCase();
     if (filter && !text.includes(filter)) return;
 
     const tr = document.createElement('tr');
@@ -574,14 +545,9 @@ function renderRulesTable() {
     tr.innerHTML =
       '<td><span class="drag-handle" title="Drag to reorder">☰</span>' + (idx + 1) + '</td>' +
       '<td><input type="text" class="mono" value="' + escAttr(rule.id || '') + '" placeholder="e.g. gpt-5.4" oninput="updateRule(' + idx + ', \'id\', this.value)"></td>' +
-      '<td><input type="text" class="mono" value="' + escAttr(rule.new_id || '') + '" placeholder="(keep original ID)" oninput="updateRule(' + idx + ', \'new_id\', this.value)"></td>' +
-      '<td><input type="text" value="' + escAttr(rule.display_name || '') + '" placeholder="(keep default name)" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
-      '<td style="text-align:center;"><input type="checkbox" ' + (rule.hidden ? 'checked' : '') + ' onchange="updateRule(' + idx + ', \'hidden\', this.checked); renderAll();"></td>' +
-      '<td><div class="row-actions">' +
-        '<button class="sm" onclick="moveRule(' + idx + ', -1)" title="Move up">↑</button>' +
-        '<button class="sm" onclick="moveRule(' + idx + ', 1)" title="Move down">↓</button>' +
-        '<button class="sm" onclick="removeRule(' + idx + ')" title="Remove">✕</button>' +
-      '</div></td>';
+      '<td><input type="text" class="mono" value="' + escAttr(rule.new_id || '') + '" placeholder="' + escAttr(rule.id || 'keep original ID') + '" oninput="updateRule(' + idx + ', \'new_id\', this.value)"></td>' +
+      '<td><input type="text" value="' + escAttr(rule.display_name || '') + '" placeholder="' + escAttr(defName || 'keep default name') + '" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
+      '<td style="text-align:center;"><input type="checkbox" ' + (rule.hidden ? 'checked' : '') + ' onchange="updateRule(' + idx + ', \'hidden\', this.checked); renderAll();"></td>';
     tbody.appendChild(tr);
   });
 }
@@ -589,78 +555,13 @@ function renderRulesTable() {
 function updateRule(idx, field, val) {
   if (!state.config.models[idx]) return;
   state.config.models[idx][field] = typeof val === 'string' ? val.trim() : val;
-  renderAvailableTable();
   renderPreview();
   renderYAML();
 }
 
-function moveRule(idx, delta) {
-  const target = idx + delta;
-  if (target < 0 || target >= state.config.models.length) return;
-  const tmp = state.config.models[idx];
-  state.config.models[idx] = state.config.models[target];
-  state.config.models[target] = tmp;
-  renderAll();
-}
-
-function removeRule(idx) {
-  state.config.models.splice(idx, 1);
-  renderAll();
-}
-
 function addBlankRule() {
-  state.config.models.push({ id: '', new_id: '', display_name: '', hidden: false });
+  state.config.models.unshift({ id: '', new_id: '', display_name: '', hidden: false });
   renderAll();
-}
-
-function populateAllAvailable() {
-  const existing = new Set(state.config.models.map(r => (r.id || '').toLowerCase()));
-  for (const item of state.available) {
-    if (!existing.has(item.id.toLowerCase())) {
-      state.config.models.push({
-        id: item.id,
-        new_id: '',
-        display_name: item.display_name !== item.id ? item.display_name : '',
-        hidden: false
-      });
-      existing.add(item.id.toLowerCase());
-    }
-  }
-  renderAll();
-}
-
-function pinAvailableModel(id, displayName, hidden) {
-  state.config.models.push({
-    id: id,
-    new_id: '',
-    display_name: displayName && displayName !== id ? displayName : '',
-    hidden: !!hidden
-  });
-  renderAll();
-}
-
-function renderAvailableTable() {
-  const tbody = document.getElementById('availableBody');
-  tbody.innerHTML = '';
-  const listed = new Set(state.config.models.map(r => (r.id || '').toLowerCase()));
-  const unlisted = state.available.filter(a => !listed.has(a.id.toLowerCase()));
-  document.getElementById('unlistedCount').textContent = String(unlisted.length);
-
-  for (const item of unlisted) {
-    const isHiddenByPattern = matchesAnyGlob(item.id, item.display_name, state.config.hide) || state.config.hide_unlisted;
-    const tr = document.createElement('tr');
-    if (isHiddenByPattern) tr.className = 'hidden-row';
-    const badges = (item.providers || []).map(p => '<span class="badge">' + escHTML(p) + '</span>').join('');
-    tr.innerHTML =
-      '<td class="mono">' + escHTML(item.id) + '</td>' +
-      '<td>' + escHTML(item.display_name || item.id) + (isHiddenByPattern ? ' <span class="badge">hidden</span>' : '') + '</td>' +
-      '<td>' + badges + '</td>' +
-      '<td><div class="row-actions">' +
-        '<button class="sm" data-id="' + escAttr(item.id) + '" data-dn="' + escAttr(item.display_name || '') + '" onclick="pinAvailableModel(this.dataset.id, this.dataset.dn, false)">+ Pin</button>' +
-        '<button class="sm" data-id="' + escAttr(item.id) + '" data-dn="' + escAttr(item.display_name || '') + '" onclick="pinAvailableModel(this.dataset.id, this.dataset.dn, true)">Hide</button>' +
-      '</div></td>';
-    tbody.appendChild(tr);
-  }
 }
 
 function cloakClaudeID(id) {
@@ -668,65 +569,58 @@ function cloakClaudeID(id) {
   return 'claude-fable-5-dd-' + Array.from(id).reverse().join('');
 }
 
-function globToRegExp(pat) {
-  const escaped = pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
-  return new RegExp('^' + escaped + '$', 'i');
-}
-
-function matchesAnyGlob(id, dn, patterns) {
-  for (const p of (patterns || [])) {
-    if (!p) continue;
-    const rx = globToRegExp(p);
-    if (rx.test(id) || (dn && rx.test(dn))) return true;
-  }
-  return false;
-}
-
 function renderPreview() {
   const list = document.getElementById('previewList');
-  const cloak = document.getElementById('previewClaudeCloak').checked;
+  const cloak = state.claude_cloaking !== false;
   list.innerHTML = '';
 
-  const availByID = new Map();
-  for (const a of state.available) availByID.set(a.id.toLowerCase(), a);
+  const topBuiltins = [
+    { label: 'Default (recommended)', desc: 'Use the default model (currently Opus 5.5) · $4/$20 per Mtok', builtin: true },
+    { label: 'Opus', desc: 'Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok', builtin: true }
+  ];
+  const bottomBuiltins = [
+    { label: 'Fable', desc: 'Fable 5.1 · Most capable for your hardest and longest-running tasks · $10/$50 per Mtok', builtin: true },
+    { label: 'Sonnet', desc: 'Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok', builtin: true },
+    { label: 'Haiku', desc: 'Haiku 5.5 · Fastest for quick answers · $0.10/$0.50 per Mtok', builtin: true }
+  ];
 
-  const used = new Set();
-  const finalItems = [];
+  const topGateway = [];
+  const bottomGateway = [];
 
   for (const r of state.config.models) {
     const id = (r.id || '').trim();
-    if (!id) continue;
-    used.add(id.toLowerCase());
-    if (r.hidden) continue;
-    const base = availByID.get(id.toLowerCase()) || { id: id, display_name: id };
-    const effectiveID = (r.new_id || '').trim() || base.id;
-    const effectiveName = (r.display_name || '').trim() || (r.new_id ? r.new_id : (base.display_name || base.id));
-    finalItems.push({
-      id: cloak ? cloakClaudeID(effectiveID) : effectiveID,
-      rawId: base.id,
-      displayName: effectiveName,
-      pinned: true
-    });
-  }
+    if (!id || r.hidden) continue;
+    const defName = defaultDisplayNameFor(id);
+    const rawNewID = (r.new_id || '').trim() || id;
+    const effectiveID = cloak ? cloakClaudeID(rawNewID) : rawNewID;
+    const effectiveName = (r.display_name || '').trim() || (r.new_id ? r.new_id.trim() : defName);
 
-  if (!state.config.hide_unlisted) {
-    for (const a of state.available) {
-      if (used.has(a.id.toLowerCase())) continue;
-      if (matchesAnyGlob(a.id, a.display_name, state.config.hide)) continue;
-      finalItems.push({
-        id: cloak ? cloakClaudeID(a.id) : a.id,
-        rawId: a.id,
-        displayName: a.display_name || a.id,
-        pinned: false
-      });
+    if (!cloak && !/(claude|anthropic)/i.test(effectiveID)) {
+      continue;
+    }
+
+    const entry = {
+      label: effectiveName,
+      id: effectiveID,
+      desc: 'From gateway',
+      builtin: false
+    };
+    if (effectiveID.toLowerCase().startsWith('claude-fable-5')) {
+      topGateway.push(entry);
+    } else {
+      bottomGateway.push(entry);
     }
   }
 
-  for (const item of finalItems) {
+  const finalRows = [...topBuiltins, ...topGateway, ...bottomBuiltins, ...bottomGateway];
+  for (const item of finalRows) {
     const li = document.createElement('li');
-    li.innerHTML = '<strong>' + escHTML(item.displayName) + '</strong> ' +
-      '<span class="mono muted">(' + escHTML(item.id) + ')</span>' +
-      (item.pinned ? ' <span class="badge">pinned</span>' : '');
+    if (item.builtin) {
+      li.className = 'builtin-item';
+      li.innerHTML = '<strong>' + escHTML(item.label) + '</strong> <span class="badge builtin">Claude built-in</span> <div class="muted" style="font-size:0.76rem;">' + escHTML(item.desc) + '</div>';
+    } else {
+      li.innerHTML = '<strong>' + escHTML(item.label) + '</strong> <span class="mono muted">(' + escHTML(item.id) + ')</span> <span class="badge">From gateway</span>';
+    }
     list.appendChild(li);
   }
 }
@@ -738,15 +632,12 @@ function buildConfigObject() {
       const out = { id: r.id.trim() };
       if (r.new_id && r.new_id.trim()) out.new_id = r.new_id.trim();
       if (r.display_name && r.display_name.trim()) out.display_name = r.display_name.trim();
-      if (r.provider && r.provider.trim()) out.provider = r.provider.trim();
       if (r.hidden) out.hidden = true;
       return out;
     });
   return {
     enabled: true,
     priority: state.config.priority || 100,
-    hide_unlisted: !!state.config.hide_unlisted,
-    hide: (state.config.hide || []).filter(Boolean),
     models: models
   };
 }
@@ -760,21 +651,13 @@ function renderYAML() {
     '    model-list-tweaker:',
     '      enabled: true',
     '      priority: ' + cfg.priority,
-    '      hide_unlisted: ' + (cfg.hide_unlisted ? 'true' : 'false')
+    '      models:'
   ];
-  if (cfg.hide.length > 0) {
-    lines.push('      hide:');
-    for (const h of cfg.hide) lines.push('        - ' + JSON.stringify(h));
-  }
-  if (cfg.models.length > 0) {
-    lines.push('      models:');
-    for (const m of cfg.models) {
-      lines.push('        - id: ' + JSON.stringify(m.id));
-      if (m.new_id) lines.push('          new_id: ' + JSON.stringify(m.new_id));
-      if (m.display_name) lines.push('          display_name: ' + JSON.stringify(m.display_name));
-      if (m.provider) lines.push('          provider: ' + JSON.stringify(m.provider));
-      if (m.hidden) lines.push('          hidden: true');
-    }
+  for (const m of cfg.models) {
+    lines.push('        - id: ' + JSON.stringify(m.id));
+    if (m.new_id) lines.push('          new_id: ' + JSON.stringify(m.new_id));
+    if (m.display_name) lines.push('          display_name: ' + JSON.stringify(m.display_name));
+    if (m.hidden) lines.push('          hidden: true');
   }
   document.getElementById('yamlPreview').value = lines.join('\n');
 }
