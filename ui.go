@@ -264,7 +264,7 @@ const editorHTMLTemplate = `<!doctype html>
     color: var(--text);
     line-height: 1.45;
   }
-  .container { max-width: 1280px; margin: 0 auto; }
+  .container { max-width: 100%; margin: 0 auto; }
   header {
     display: flex;
     flex-wrap: wrap;
@@ -287,6 +287,7 @@ const editorHTMLTemplate = `<!doctype html>
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
+    white-space: nowrap;
   }
   button:hover { border-color: var(--accent); }
   button.primary {
@@ -302,8 +303,8 @@ const editorHTMLTemplate = `<!doctype html>
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 7px 10px;
-    font-size: 0.85rem;
+    padding: 5px 8px;
+    font-size: 0.83rem;
     width: 100%;
   }
   input[type="text"]:focus, input[type="password"]:focus, textarea:focus {
@@ -312,8 +313,9 @@ const editorHTMLTemplate = `<!doctype html>
   }
   .grid {
     display: grid;
-    grid-template-columns: 1.5fr 1fr;
+    grid-template-columns: max-content minmax(0, 1fr);
     gap: 20px;
+    align-items: start;
   }
   @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
   .card {
@@ -329,27 +331,32 @@ const editorHTMLTemplate = `<!doctype html>
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
   }
   table {
-    width: 100%;
+    width: auto;
     border-collapse: collapse;
-    font-size: 0.85rem;
+    font-size: 0.83rem;
   }
   th, td {
     text-align: left;
-    padding: 8px;
+    padding: 5px 8px;
     border-bottom: 1px solid var(--border);
     vertical-align: middle;
+    white-space: nowrap;
   }
-  th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.76rem; text-transform: uppercase; }
   tr.dragging { opacity: 0.45; }
   tr.hidden-row { opacity: 0.5; }
   .drag-handle {
     cursor: grab;
     color: var(--muted);
     user-select: none;
-    font-size: 1.1rem;
-    padding: 0 6px;
+    font-size: 1rem;
+    padding-right: 4px;
+  }
+  .display-input {
+    width: 210px !important;
   }
   .badge {
     display: inline-block;
@@ -360,6 +367,7 @@ const editorHTMLTemplate = `<!doctype html>
     border: 1px solid var(--border);
     color: var(--muted);
     margin-left: 6px;
+    white-space: nowrap;
   }
   .badge.builtin {
     border-color: #475569;
@@ -376,25 +384,33 @@ const editorHTMLTemplate = `<!doctype html>
   .status-bar.err { display: block; background: rgba(239,68,68,0.15); border: 1px solid var(--danger); color: #fca5a5; }
   .preview-list {
     list-style: decimal;
-    padding-left: 26px;
+    padding-left: 28px;
     margin: 0;
     font-size: 0.84rem;
+    overflow-x: auto;
   }
   .preview-list li {
-    padding: 6px 4px;
+    padding: 5px 4px;
     border-bottom: 1px solid rgba(51,65,85,0.5);
+    white-space: nowrap;
   }
   .preview-list li.builtin-item {
     color: #94a3b8;
   }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
   .muted { color: var(--muted); }
   .top-controls {
     display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
+    gap: 8px;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
+  }
+  .th-hide-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    user-select: none;
   }
 </style>
 </head>
@@ -415,40 +431,44 @@ const editorHTMLTemplate = `<!doctype html>
   <div id="statusBar" class="status-bar"></div>
 
   <div class="grid">
-    <div>
-      <div class="card">
-        <h2><span>Model List</span></h2>
-        <div class="top-controls">
-          <input type="text" id="filterInput" placeholder="Filter models..." oninput="renderRulesTable()" style="max-width: 320px;">
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th style="width:44px;">#</th>
-              <th>Model ID</th>
-              <th>Display Name</th>
-              <th style="width:64px;text-align:center;">Hide</th>
-            </tr>
-          </thead>
-          <tbody id="rulesBody"></tbody>
-        </table>
+    <div class="card">
+      <h2>
+        <span>Model List</span>
+        <button class="sm" id="toggleAllBtn" onclick="toggleHideAll()">Hide All</button>
+      </h2>
+      <div class="top-controls">
+        <input type="text" id="filterInput" placeholder="Filter models..." oninput="renderRulesTable()">
       </div>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Model ID</th>
+            <th>Display Name</th>
+            <th style="text-align:center;">
+              <label class="th-hide-label" title="Hide / Unhide all visible models">
+                <input type="checkbox" id="toggleAllCheckbox" onchange="toggleHideAll(this.checked)">
+                Hide
+              </label>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="rulesBody"></tbody>
+      </table>
     </div>
 
-    <div>
-      <div class="card">
-        <h2><span>Final Order Preview (Claude <code>/model</code>)</span></h2>
-        <ol id="previewList" class="preview-list"></ol>
-      </div>
-
-      <div class="card">
-        <h2>
-          <span>YAML Snippet (<code>config.yaml</code>)</span>
-          <button class="sm" onclick="copyYAML()">Copy YAML</button>
-        </h2>
-        <textarea id="yamlPreview" rows="14" class="mono" readonly></textarea>
-      </div>
+    <div class="card">
+      <h2><span>Final Order Preview (Claude <code>/model</code>)</span></h2>
+      <ol id="previewList" class="preview-list"></ol>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>
+      <span>YAML Snippet (<code>config.yaml</code>)</span>
+      <button class="sm" onclick="copyYAML()">Copy YAML</button>
+    </h2>
+    <textarea id="yamlPreview" rows="14" class="mono" readonly></textarea>
   </div>
 </div>
 
@@ -510,6 +530,42 @@ function defaultDisplayNameFor(id) {
   return found && found.display_name ? found.display_name : id;
 }
 
+function visibleRules() {
+  const filter = (document.getElementById('filterInput').value || '').toLowerCase().trim();
+  if (!filter) return state.config.models;
+  return state.config.models.filter(rule => {
+    const defName = defaultDisplayNameFor(rule.id);
+    const text = ((rule.id || '') + ' ' + (rule.display_name || '') + ' ' + defName).toLowerCase();
+    return text.includes(filter);
+  });
+}
+
+function updateToggleAllControl() {
+  const vis = visibleRules();
+  const allHidden = vis.length > 0 && vis.every(r => !!r.hidden);
+  const someHidden = vis.some(r => !!r.hidden);
+  const cb = document.getElementById('toggleAllCheckbox');
+  const btn = document.getElementById('toggleAllBtn');
+  if (cb) {
+    cb.checked = allHidden;
+    cb.indeterminate = !allHidden && someHidden;
+  }
+  if (btn) {
+    btn.textContent = allHidden ? 'Unhide All' : 'Hide All';
+  }
+}
+
+function toggleHideAll(forceVal) {
+  const vis = visibleRules();
+  if (vis.length === 0) return;
+  const allHidden = vis.every(r => !!r.hidden);
+  const nextHidden = typeof forceVal === 'boolean' ? forceVal : !allHidden;
+  for (const r of vis) {
+    r.hidden = nextHidden;
+  }
+  renderAll();
+}
+
 function renderRulesTable() {
   const tbody = document.getElementById('rulesBody');
   const filter = (document.getElementById('filterInput').value || '').toLowerCase().trim();
@@ -538,10 +594,11 @@ function renderRulesTable() {
     tr.innerHTML =
       '<td><span class="drag-handle" title="Drag to reorder">☰</span>' + (idx + 1) + '</td>' +
       '<td class="mono">' + escHTML(rule.id || '') + '</td>' +
-      '<td><input type="text" value="' + escAttr(rule.display_name || '') + '" placeholder="' + escAttr(defName || '') + '" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
+      '<td><input type="text" class="display-input" value="' + escAttr(rule.display_name || '') + '" placeholder="' + escAttr(defName || '') + '" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
       '<td style="text-align:center;"><input type="checkbox" ' + (rule.hidden ? 'checked' : '') + ' onchange="updateRule(' + idx + ', \'hidden\', this.checked); renderAll();"></td>';
     tbody.appendChild(tr);
   });
+  updateToggleAllControl();
 }
 
 function updateRule(idx, field, val) {
@@ -603,7 +660,7 @@ function renderPreview() {
     const li = document.createElement('li');
     if (item.builtin) {
       li.className = 'builtin-item';
-      li.innerHTML = '<strong>' + escHTML(item.label) + '</strong> <span class="badge builtin">Claude built-in</span> <div class="muted" style="font-size:0.76rem;">' + escHTML(item.desc) + '</div>';
+      li.innerHTML = '<strong>' + escHTML(item.label) + '</strong> <span class="badge builtin">Claude built-in</span> <span class="muted" style="font-size:0.78rem;margin-left:6px;">' + escHTML(item.desc) + '</span>';
     } else {
       li.innerHTML = '<strong>' + escHTML(item.label) + '</strong> <span class="mono muted">(' + escHTML(item.id) + ')</span> <span class="badge">From gateway</span>';
     }
