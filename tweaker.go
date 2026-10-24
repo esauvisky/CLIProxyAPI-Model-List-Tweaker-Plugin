@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,15 +42,12 @@ type configField struct {
 }
 
 type registrationCapabilities struct {
-	ModelRouter         bool `json:"model_router"`
-	RequestInterceptor  bool `json:"request_interceptor"`
 	ResponseInterceptor bool `json:"response_interceptor"`
 	ManagementAPI       bool `json:"management_api"`
 }
 
 type modelRule struct {
 	ID          string `yaml:"id" json:"id"`
-	NewID       string `yaml:"new_id,omitempty" json:"new_id,omitempty"`
 	DisplayName string `yaml:"display_name,omitempty" json:"display_name,omitempty"`
 	Hidden      bool   `yaml:"hidden,omitempty" json:"hidden,omitempty"`
 }
@@ -66,9 +62,6 @@ func (r *modelRule) UnmarshalYAML(value *yaml.Node) error {
 	}
 	var raw struct {
 		ID          string `yaml:"id"`
-		NewID       string `yaml:"new_id"`
-		NewIDDash   string `yaml:"new-id"`
-		Alias       string `yaml:"alias"`
 		DisplayName string `yaml:"display_name"`
 		DisplayDash string `yaml:"display-name"`
 		Name        string `yaml:"name"`
@@ -79,7 +72,6 @@ func (r *modelRule) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	r.ID = strings.TrimSpace(raw.ID)
-	r.NewID = firstNonEmpty(raw.NewID, raw.NewIDDash, raw.Alias)
 	r.DisplayName = firstNonEmpty(raw.DisplayName, raw.DisplayDash, raw.Name)
 	r.Hidden = raw.Hidden || raw.Hide
 	return nil
@@ -100,9 +92,6 @@ func (r *modelRule) UnmarshalJSON(data []byte) error {
 	}
 	var raw struct {
 		ID          string `json:"id"`
-		NewID       string `json:"new_id"`
-		NewIDDash   string `json:"new-id"`
-		Alias       string `json:"alias"`
 		DisplayName string `json:"display_name"`
 		DisplayDash string `json:"display-name"`
 		Name        string `json:"name"`
@@ -113,7 +102,6 @@ func (r *modelRule) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	r.ID = strings.TrimSpace(raw.ID)
-	r.NewID = firstNonEmpty(raw.NewID, raw.NewIDDash, raw.Alias)
 	r.DisplayName = firstNonEmpty(raw.DisplayName, raw.DisplayDash, raw.Name)
 	r.Hidden = raw.Hidden || raw.Hide
 	return nil
@@ -123,11 +111,6 @@ type pluginConfig struct {
 	Enabled  bool        `yaml:"enabled" json:"enabled"`
 	Priority int         `yaml:"priority" json:"priority"`
 	Models   []modelRule `yaml:"models" json:"models"`
-}
-
-type compiledConfig struct {
-	raw           pluginConfig
-	aliasToTarget map[string]modelRule
 }
 
 type observedModelMeta struct {
@@ -141,7 +124,6 @@ var (
 
 	observedMu            sync.RWMutex
 	observedModels        = make(map[string]observedModelMeta)
-	lastClaudeCloakingSet atomic.Bool
 	lastClaudeCloakingVal atomic.Bool
 
 	hostModelsResolver = fetchHostAuthModels
@@ -149,7 +131,7 @@ var (
 
 func init() {
 	lastClaudeCloakingVal.Store(true)
-	activeConfig.Store(compileConfig(defaultPluginConfig()))
+	activeConfig.Store(normalizeConfig(defaultPluginConfig()))
 }
 
 func defaultPluginConfig() pluginConfig {
@@ -160,38 +142,29 @@ func defaultPluginConfig() pluginConfig {
 	}
 }
 
-func compileConfig(cfg pluginConfig) compiledConfig {
+func normalizeConfig(cfg pluginConfig) pluginConfig {
 	cleanedModels := make([]modelRule, 0, len(cfg.Models))
-	aliasToTarget := make(map[string]modelRule, len(cfg.Models))
 	for _, rule := range cfg.Models {
 		rule.ID = strings.TrimSpace(rule.ID)
-		rule.NewID = strings.TrimSpace(rule.NewID)
 		rule.DisplayName = strings.TrimSpace(rule.DisplayName)
 		if rule.ID == "" {
 			continue
 		}
 		cleanedModels = append(cleanedModels, rule)
-		if rule.NewID != "" && !strings.EqualFold(rule.NewID, rule.ID) {
-			aliasToTarget[rule.NewID] = rule
-			aliasToTarget[strings.ToLower(rule.NewID)] = rule
-		}
 	}
 	cfg.Models = cleanedModels
-	return compiledConfig{
-		raw:           cfg,
-		aliasToTarget: aliasToTarget,
-	}
+	return cfg
 }
 
-func currentCompiledConfig() compiledConfig {
-	if loaded, ok := activeConfig.Load().(compiledConfig); ok {
+func currentConfig() pluginConfig {
+	if loaded, ok := activeConfig.Load().(pluginConfig); ok {
 		return loaded
 	}
-	return compileConfig(defaultPluginConfig())
+	return defaultPluginConfig()
 }
 
 func setPluginConfig(cfg pluginConfig) {
-	activeConfig.Store(compileConfig(cfg))
+	activeConfig.Store(normalizeConfig(cfg))
 }
 
 func configurePlugin(raw []byte) error {
@@ -218,7 +191,7 @@ func decodePluginConfigYAML(rawYAML []byte) (pluginConfig, error) {
 	if errUnmarshal := yaml.Unmarshal(rawYAML, &cfg); errUnmarshal != nil {
 		return pluginConfig{}, errUnmarshal
 	}
-	return cfg, nil
+	return normalizeConfig(cfg), nil
 }
 
 func pluginRegistration() registration {
@@ -234,13 +207,11 @@ func pluginRegistration() registration {
 					Name:        "models",
 					Type:        "array",
 					Default:     []any{},
-					Description: "Ordered list of model rules ({id, new_id, display_name, hidden}).",
+					Description: "Ordered list of models ({id, display_name, hidden}).",
 				},
 			},
 		},
 		Capabilities: registrationCapabilities{
-			ModelRouter:         true,
-			RequestInterceptor:  true,
 			ResponseInterceptor: true,
 			ManagementAPI:       true,
 		},
@@ -269,52 +240,6 @@ type responseInterceptResponse struct {
 	ClearHeaders []string    `json:"ClearHeaders,omitempty"`
 }
 
-type requestInterceptRequest struct {
-	RequestID      string         `json:"RequestID"`
-	TraceID        string         `json:"TraceID"`
-	SourceFormat   string         `json:"SourceFormat"`
-	ToFormat       string         `json:"ToFormat"`
-	Model          string         `json:"Model"`
-	RequestedModel string         `json:"RequestedModel"`
-	Stream         bool           `json:"Stream"`
-	Headers        http.Header    `json:"Headers"`
-	Body           []byte         `json:"Body"`
-	Metadata       map[string]any `json:"Metadata"`
-	HostCallbackID string         `json:"host_callback_id,omitempty"`
-}
-
-type requestInterceptResponse struct {
-	Path            string      `json:"path,omitempty"`
-	Headers         http.Header `json:"Headers,omitempty"`
-	Body            []byte      `json:"Body,omitempty"`
-	ClearHeaders    []string    `json:"ClearHeaders,omitempty"`
-	Terminate       bool        `json:"Terminate,omitempty"`
-	StatusCode      int         `json:"StatusCode,omitempty"`
-	ResponseHeaders http.Header `json:"ResponseHeaders,omitempty"`
-	ResponseBody    []byte      `json:"ResponseBody,omitempty"`
-}
-
-type modelRouteRequest struct {
-	PluginID           string         `json:"PluginID"`
-	SourceFormat       string         `json:"SourceFormat"`
-	RequestedModel     string         `json:"RequestedModel"`
-	Stream             bool           `json:"Stream"`
-	Headers            http.Header    `json:"Headers"`
-	Query              url.Values     `json:"Query"`
-	Body               []byte         `json:"Body"`
-	Metadata           map[string]any `json:"Metadata"`
-	AvailableProviders []string       `json:"AvailableProviders"`
-	HostCallbackID     string         `json:"host_callback_id,omitempty"`
-}
-
-type modelRouteResponse struct {
-	Handled     bool   `json:"Handled"`
-	TargetKind  string `json:"TargetKind,omitempty"`
-	Target      string `json:"Target,omitempty"`
-	TargetModel string `json:"TargetModel,omitempty"`
-	Reason      string `json:"Reason,omitempty"`
-}
-
 type hostAuthModelsRequest struct {
 	AuthIndex      string `json:"auth_index,omitempty"`
 	HostCallbackID string `json:"host_callback_id,omitempty"`
@@ -331,147 +256,6 @@ type hostAuthModelsEntry struct {
 	Models    []string `json:"models"`
 }
 
-func handleResponseInterceptAfter(raw []byte) ([]byte, error) {
-	var req responseInterceptRequest
-	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
-		return nil, errUnmarshal
-	}
-	if req.Model != "" || req.RequestedModel != "" || len(req.OriginalRequest) > 0 || len(req.Body) == 0 {
-		return okEnvelope(responseInterceptResponse{})
-	}
-	compiled := currentCompiledConfig()
-	if !compiled.raw.Enabled {
-		return okEnvelope(responseInterceptResponse{})
-	}
-	updated, changed := transformCatalogBody(req.SourceFormat, req.Body, compiled.raw)
-	if !changed {
-		return okEnvelope(responseInterceptResponse{})
-	}
-	return okEnvelope(responseInterceptResponse{Body: updated})
-}
-
-func handleModelRoute(raw []byte) ([]byte, error) {
-	var req modelRouteRequest
-	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
-		return nil, errUnmarshal
-	}
-	compiled := currentCompiledConfig()
-	if !compiled.raw.Enabled || len(compiled.aliasToTarget) == 0 {
-		return okEnvelope(modelRouteResponse{Handled: false})
-	}
-	_, targetModel, matched := resolveAliasModel(req.RequestedModel, compiled)
-	if !matched {
-		return okEnvelope(modelRouteResponse{Handled: false})
-	}
-	baseOriginal, _, _ := splitThinkingSuffix(targetModel)
-	provider := resolveProviderForModel(baseOriginal, req.AvailableProviders, req.HostCallbackID)
-	if provider == "" {
-		return okEnvelope(modelRouteResponse{Handled: false})
-	}
-	return okEnvelope(modelRouteResponse{
-		Handled:     true,
-		TargetKind:  "provider",
-		Target:      provider,
-		TargetModel: targetModel,
-		Reason:      "model_list_tweaker_alias",
-	})
-}
-
-func handleRequestInterceptBefore(raw []byte) ([]byte, error) {
-	var req requestInterceptRequest
-	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
-		return nil, errUnmarshal
-	}
-	compiled := currentCompiledConfig()
-	if !compiled.raw.Enabled || len(compiled.aliasToTarget) == 0 || len(req.Body) == 0 {
-		return okEnvelope(requestInterceptResponse{})
-	}
-	updatedBody, changed := rewriteRequestBodyModel(req.Body, req.RequestedModel, compiled)
-	if !changed {
-		return okEnvelope(requestInterceptResponse{})
-	}
-	return okEnvelope(requestInterceptResponse{Body: updatedBody})
-}
-
-func resolveAliasModel(requested string, compiled compiledConfig) (modelRule, string, bool) {
-	trimmed := strings.TrimSpace(requested)
-	if trimmed == "" {
-		return modelRule{}, "", false
-	}
-	trimmed = strings.TrimPrefix(trimmed, "models/")
-	base, suffix, hasSuffix := splitThinkingSuffix(trimmed)
-	uncloaked := resolveClaudeModelIDPrefix(base)
-
-	for _, candidate := range []string{uncloaked, base, strings.ToLower(uncloaked), strings.ToLower(base)} {
-		if rule, ok := compiled.aliasToTarget[candidate]; ok {
-			target := rule.ID
-			if hasSuffix {
-				target = target + "(" + suffix + ")"
-			}
-			return rule, target, true
-		}
-	}
-	return modelRule{}, "", false
-}
-
-func rewriteRequestBodyModel(body []byte, requestedModel string, compiled compiledConfig) ([]byte, bool) {
-	var payload map[string]any
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.UseNumber()
-	if errDecode := dec.Decode(&payload); errDecode != nil || payload == nil {
-		return nil, false
-	}
-	rawModel, _ := payload["model"].(string)
-	lookup := rawModel
-	if strings.TrimSpace(lookup) == "" {
-		lookup = requestedModel
-	}
-	_, targetModel, matched := resolveAliasModel(lookup, compiled)
-	if !matched {
-		return nil, false
-	}
-	if rawModel == targetModel {
-		return nil, false
-	}
-	payload["model"] = targetModel
-	updated, errMarshal := marshalJSONNoEscape(payload)
-	if errMarshal != nil {
-		return nil, false
-	}
-	return updated, true
-}
-
-func resolveProviderForModel(modelID string, availableProviders []string, hostCallbackID string) string {
-	if credentials, errFetch := hostModelsResolver(hostCallbackID); errFetch == nil {
-		for _, cred := range credentials {
-			prov := strings.ToLower(strings.TrimSpace(cred.Provider))
-			if prov == "" || !isProviderAvailable(prov, availableProviders) {
-				continue
-			}
-			for _, m := range cred.Models {
-				if strings.EqualFold(strings.TrimSpace(m), modelID) {
-					return prov
-				}
-			}
-		}
-	}
-	observedMu.RLock()
-	meta, hasMeta := observedModels[modelID]
-	observedMu.RUnlock()
-	if hasMeta && meta.OwnedBy != "" {
-		if prov := matchOwnedByToProvider(meta.OwnedBy, availableProviders); prov != "" {
-			return prov
-		}
-	}
-	if prov := inferProviderFromModelID(modelID, availableProviders); prov != "" {
-		return prov
-	}
-	if len(availableProviders) == 1 {
-		return strings.ToLower(strings.TrimSpace(availableProviders[0]))
-	}
-	return ""
-}
-
 func fetchHostAuthModels(hostCallbackID string) ([]hostAuthModelsEntry, error) {
 	raw, errCall := callHost(methodHostAuthModels, hostAuthModelsRequest{
 		HostCallbackID: hostCallbackID,
@@ -486,58 +270,23 @@ func fetchHostAuthModels(hostCallbackID string) ([]hostAuthModelsEntry, error) {
 	return resp.Credentials, nil
 }
 
-func isProviderAvailable(provider string, available []string) bool {
-	if len(available) == 0 {
-		return true
+func handleResponseInterceptAfter(raw []byte) ([]byte, error) {
+	var req responseInterceptRequest
+	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
+		return nil, errUnmarshal
 	}
-	for _, p := range available {
-		if strings.EqualFold(strings.TrimSpace(p), provider) {
-			return true
-		}
+	if req.Model != "" || req.RequestedModel != "" || len(req.OriginalRequest) > 0 || len(req.Body) == 0 {
+		return okEnvelope(responseInterceptResponse{})
 	}
-	return false
-}
-
-func matchOwnedByToProvider(ownedBy string, available []string) string {
-	lower := strings.ToLower(strings.TrimSpace(ownedBy))
-	candidates := []string{lower}
-	switch lower {
-	case "anthropic":
-		candidates = []string{"claude", "antigravity", "anthropic"}
-	case "openai":
-		candidates = []string{"codex", "openai"}
-	case "google":
-		candidates = []string{"gemini", "gemini-cli", "antigravity", "vertex", "aistudio"}
-	case "xai":
-		candidates = []string{"xai", "grok"}
+	cfg := currentConfig()
+	if !cfg.Enabled {
+		return okEnvelope(responseInterceptResponse{})
 	}
-	for _, c := range candidates {
-		if isProviderAvailable(c, available) && len(available) > 0 {
-			return c
-		}
+	updated, changed := transformCatalogBody(req.SourceFormat, req.Body, cfg)
+	if !changed {
+		return okEnvelope(responseInterceptResponse{})
 	}
-	return ""
-}
-
-func inferProviderFromModelID(modelID string, available []string) string {
-	lower := strings.ToLower(strings.TrimSpace(modelID))
-	var candidates []string
-	switch {
-	case strings.HasPrefix(lower, "claude-"):
-		candidates = []string{"claude", "antigravity"}
-	case strings.HasPrefix(lower, "gpt-"), strings.HasPrefix(lower, "o1"), strings.HasPrefix(lower, "o3"), strings.HasPrefix(lower, "o4"), strings.HasPrefix(lower, "codex"):
-		candidates = []string{"codex", "openai"}
-	case strings.HasPrefix(lower, "gemini-"):
-		candidates = []string{"gemini", "gemini-cli", "antigravity", "vertex"}
-	case strings.HasPrefix(lower, "grok-"):
-		candidates = []string{"xai", "grok"}
-	}
-	for _, c := range candidates {
-		if len(available) == 0 || isProviderAvailable(c, available) {
-			return c
-		}
-	}
-	return ""
+	return okEnvelope(responseInterceptResponse{Body: updated})
 }
 
 func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([]byte, bool) {
@@ -574,7 +323,6 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 	isClaudeFormat := strings.EqualFold(strings.TrimSpace(sourceFormat), "claude") || hasClaudePaginationFields(root)
 	claudeCloakingActive := detectClaudeCloaking(items, isClaudeFormat)
 	if isClaudeFormat {
-		lastClaudeCloakingSet.Store(true)
 		lastClaudeCloakingVal.Store(claudeCloakingActive)
 	}
 
@@ -708,60 +456,19 @@ func matchesRule(item map[string]any, target string) bool {
 
 func applyRuleToItem(item map[string]any, rule modelRule, isClaudeFormat, claudeCloakingActive bool) map[string]any {
 	out := cloneMap(item)
-	canonicalID, rawID, _ := extractItemIdentifiers(out)
-
 	if rule.DisplayName != "" {
 		if _, hasCamel := out["displayName"]; hasCamel {
 			out["displayName"] = rule.DisplayName
 		} else {
 			out["display_name"] = rule.DisplayName
 		}
-	} else if rule.NewID != "" {
-		if dn, ok := out["display_name"].(string); ok && (dn == "" || dn == canonicalID || dn == rawID) {
-			out["display_name"] = rule.NewID
-		} else if dn, ok := out["displayName"].(string); ok && (dn == "" || dn == canonicalID || dn == rawID) {
-			out["displayName"] = rule.NewID
-		}
 	}
-
-	if rule.NewID != "" {
-		newID := rule.NewID
-		if _, hasSlug := out["slug"]; hasSlug {
-			out["slug"] = newID
-			if _, hasID := out["id"]; hasID {
-				out["id"] = newID
-			}
-		} else if nameVal, hasName := out["name"].(string); hasName && isGeminiModelObject(out) {
-			trimmedNew := strings.TrimPrefix(newID, "models/")
-			if strings.HasPrefix(nameVal, "models/") {
-				out["name"] = "models/" + trimmedNew
-			} else {
-				out["name"] = newID
-			}
-		} else {
-			if isClaudeFormat && claudeCloakingActive {
-				out["id"] = ensureClaudeModelIDPrefix(newID)
-			} else {
-				out["id"] = newID
-			}
-		}
-	} else if isClaudeFormat && claudeCloakingActive {
+	if isClaudeFormat && claudeCloakingActive {
 		if id, ok := out["id"].(string); ok && id != "" {
 			out["id"] = ensureClaudeModelIDPrefix(id)
 		}
 	}
 	return out
-}
-
-func isGeminiModelObject(item map[string]any) bool {
-	if _, hasID := item["id"]; hasID {
-		return false
-	}
-	if _, hasSlug := item["slug"]; hasSlug {
-		return false
-	}
-	_, hasName := item["name"].(string)
-	return hasName
 }
 
 func hasClaudePaginationFields(root map[string]any) bool {

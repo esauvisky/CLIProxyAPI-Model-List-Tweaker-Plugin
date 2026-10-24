@@ -66,7 +66,7 @@ const (
 	schemaVersion uint32 = 6
 
 	pluginID      = "model-list-tweaker"
-	pluginVersion = "0.2.0"
+	pluginVersion = "0.2.1"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin"
 
@@ -74,9 +74,6 @@ const (
 	methodPluginReconfigure  = "plugin.reconfigure"
 	methodPluginQuiesce      = "plugin.quiesce"
 	methodPluginShutdown     = "plugin.shutdown"
-	methodModelRoute         = "model.route"
-	methodRequestBefore      = "request.intercept_before"
-	methodRequestAfter       = "request.intercept_after"
 	methodResponseAfter      = "response.intercept_after"
 	methodManagementRegister = "management.register"
 	methodManagementHandle   = "management.handle"
@@ -152,12 +149,6 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return okEnvelope(pluginRegistration())
 	case methodPluginQuiesce, methodPluginShutdown:
 		return okEnvelope(struct{}{})
-	case methodModelRoute:
-		return handleModelRoute(request)
-	case methodRequestBefore:
-		return handleRequestInterceptBefore(request)
-	case methodRequestAfter:
-		return okEnvelope(requestInterceptResponse{})
 	case methodResponseAfter:
 		return handleResponseInterceptAfter(request)
 	case methodManagementRegister:
@@ -216,16 +207,11 @@ func callHost(method string, payload any) (json.RawMessage, error) {
 }
 
 func okEnvelope(v any) ([]byte, error) {
-	var buf []byte
 	raw, errMarshal := marshalJSONNoEscape(v)
 	if errMarshal != nil {
 		return nil, errMarshal
 	}
-	buf, errMarshal = marshalJSONNoEscape(envelope{OK: true, Result: raw})
-	if errMarshal != nil {
-		return nil, errMarshal
-	}
-	return buf, nil
+	return marshalJSONNoEscape(envelope{OK: true, Result: raw})
 }
 
 func errorEnvelope(code, message string) []byte {

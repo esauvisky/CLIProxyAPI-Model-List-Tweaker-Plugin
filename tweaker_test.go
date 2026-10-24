@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -12,7 +11,6 @@ enabled: true
 priority: 100
 models:
   - id: "gpt-5.4"
-    new_id: "codex-5.4"
     display_name: "1. Codex 5.4"
   - id: "claude-opus-4-7"
     display_name: "2. Claude Opus 4.7"
@@ -60,7 +58,7 @@ models:
 		t.Fatalf("len(data) = %d, want 3; body = %s", len(parsed.Data), string(out))
 	}
 
-	wantFirstID := ensureClaudeModelIDPrefix("codex-5.4")
+	wantFirstID := ensureClaudeModelIDPrefix("gpt-5.4")
 	if parsed.Data[0].ID != wantFirstID || parsed.Data[0].DisplayName != "1. Codex 5.4" {
 		t.Fatalf("data[0] = %+v, want id=%q display_name=%q", parsed.Data[0], wantFirstID, "1. Codex 5.4")
 	}
@@ -114,12 +112,12 @@ func TestTransformCatalogBody_FollowsDisabledCloaking(t *testing.T) {
 	}
 }
 
-func TestTransformCatalogBody_CodexPriorityAndGeminiPrefix(t *testing.T) {
+func TestTransformCatalogBody_CodexPriorityAndGeminiDisplayName(t *testing.T) {
 	cfg := pluginConfig{
 		Enabled: true,
 		Models: []modelRule{
-			{ID: "gpt-5.4", NewID: "codex-prime", DisplayName: "Codex Prime"},
-			{ID: "gemini-2.5-pro", NewID: "gemini-pro-custom", DisplayName: "Gemini Custom"},
+			{ID: "gpt-5.4", DisplayName: "Codex Prime"},
+			{ID: "gemini-2.5-pro", DisplayName: "Gemini Custom"},
 		},
 	}
 
@@ -138,7 +136,7 @@ func TestTransformCatalogBody_CodexPriorityAndGeminiPrefix(t *testing.T) {
 	if err := json.Unmarshal(codexOut, &codexParsed); err != nil {
 		t.Fatalf("unmarshal codex: %v", err)
 	}
-	if codexParsed.Models[0].Slug != "codex-prime" || codexParsed.Models[0].Priority != 0 || codexParsed.Models[1].Priority != 1 {
+	if codexParsed.Models[0].Slug != "gpt-5.4" || codexParsed.Models[0].DisplayName != "Codex Prime" || codexParsed.Models[0].Priority != 0 || codexParsed.Models[1].Priority != 1 {
 		t.Fatalf("unexpected codex models: %+v", codexParsed.Models)
 	}
 
@@ -156,67 +154,7 @@ func TestTransformCatalogBody_CodexPriorityAndGeminiPrefix(t *testing.T) {
 	if err := json.Unmarshal(geminiOut, &geminiParsed); err != nil {
 		t.Fatalf("unmarshal gemini: %v", err)
 	}
-	if geminiParsed.Models[0].Name != "models/gemini-pro-custom" || geminiParsed.Models[0].DisplayName != "Gemini Custom" {
+	if geminiParsed.Models[0].Name != "models/gemini-2.5-pro" || geminiParsed.Models[0].DisplayName != "Gemini Custom" {
 		t.Fatalf("unexpected gemini models: %+v", geminiParsed.Models)
-	}
-}
-
-func TestRouteAndRewriteRenamedModelWithThinkingSuffix(t *testing.T) {
-	prevResolver := hostModelsResolver
-	hostModelsResolver = func(_ string) ([]hostAuthModelsEntry, error) {
-		return []hostAuthModelsEntry{
-			{ID: "auth-1", Provider: "codex", Models: []string{"gpt-5.4"}},
-		}, nil
-	}
-	t.Cleanup(func() {
-		hostModelsResolver = prevResolver
-	})
-
-	setPluginConfig(pluginConfig{
-		Enabled: true,
-		Models: []modelRule{
-			{ID: "gpt-5.4", NewID: "codex-fast", DisplayName: "Codex Fast"},
-		},
-	})
-
-	routeReq, _ := json.Marshal(modelRouteRequest{
-		SourceFormat:       "claude",
-		RequestedModel:     "codex-fast(xhigh)",
-		AvailableProviders: []string{"claude", "codex"},
-	})
-	rawRouteResp, errRoute := handleModelRoute(routeReq)
-	if errRoute != nil {
-		t.Fatalf("handleModelRoute: %v", errRoute)
-	}
-	var routeEnv struct {
-		OK     bool               `json:"ok"`
-		Result modelRouteResponse `json:"result"`
-	}
-	if err := json.Unmarshal(rawRouteResp, &routeEnv); err != nil {
-		t.Fatalf("decode route envelope: %v", err)
-	}
-	if !routeEnv.Result.Handled || routeEnv.Result.Target != "codex" || routeEnv.Result.TargetModel != "gpt-5.4(xhigh)" {
-		t.Fatalf("unexpected route decision: %+v", routeEnv.Result)
-	}
-
-	interceptReq, _ := json.Marshal(requestInterceptRequest{
-		SourceFormat:   "claude",
-		Model:          "gpt-5.4(xhigh)",
-		RequestedModel: "codex-fast(xhigh)",
-		Body:           []byte(`{"model":"codex-fast(xhigh)","stream":true}`),
-	})
-	rawInterceptResp, errIntercept := handleRequestInterceptBefore(interceptReq)
-	if errIntercept != nil {
-		t.Fatalf("handleRequestInterceptBefore: %v", errIntercept)
-	}
-	var interceptEnv struct {
-		OK     bool                     `json:"ok"`
-		Result requestInterceptResponse `json:"result"`
-	}
-	if err := json.Unmarshal(rawInterceptResp, &interceptEnv); err != nil {
-		t.Fatalf("decode intercept envelope: %v", err)
-	}
-	if !strings.Contains(string(interceptEnv.Result.Body), `"model":"gpt-5.4(xhigh)"`) {
-		t.Fatalf("rewritten body = %s, want model=gpt-5.4(xhigh)", string(interceptEnv.Result.Body))
 	}
 }

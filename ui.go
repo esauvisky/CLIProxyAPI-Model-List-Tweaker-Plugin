@@ -113,7 +113,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 				nextCfg.Enabled = true
 			}
 			if nextCfg.Priority == 0 {
-				nextCfg.Priority = currentCompiledConfig().raw.Priority
+				nextCfg.Priority = currentConfig().Priority
 			}
 			setPluginConfig(nextCfg)
 		}
@@ -140,7 +140,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 }
 
 func buildUIState(hostCallbackID string) uiStatePayload {
-	compiled := currentCompiledConfig()
+	cfg := currentConfig()
 	byID := make(map[string]*discoveredModel)
 
 	if credentials, errFetch := hostModelsResolver(hostCallbackID); errFetch == nil {
@@ -200,7 +200,7 @@ func buildUIState(hostCallbackID string) uiStatePayload {
 	})
 
 	return uiStatePayload{
-		Config:         compiled.raw,
+		Config:         cfg,
 		Available:      available,
 		ClaudeCloaking: lastClaudeCloakingVal.Load(),
 	}
@@ -264,7 +264,7 @@ const editorHTMLTemplate = `<!doctype html>
     color: var(--text);
     line-height: 1.45;
   }
-  .container { max-width: 1320px; margin: 0 auto; }
+  .container { max-width: 1280px; margin: 0 auto; }
   header {
     display: flex;
     flex-wrap: wrap;
@@ -312,7 +312,7 @@ const editorHTMLTemplate = `<!doctype html>
   }
   .grid {
     display: grid;
-    grid-template-columns: 1.65fr 1fr;
+    grid-template-columns: 1.5fr 1fr;
     gap: 20px;
   }
   @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
@@ -387,7 +387,7 @@ const editorHTMLTemplate = `<!doctype html>
   .preview-list li.builtin-item {
     color: #94a3b8;
   }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
   .muted { color: var(--muted); }
   .top-controls {
     display: flex;
@@ -403,7 +403,7 @@ const editorHTMLTemplate = `<!doctype html>
   <header>
     <div>
       <h1>Model List Tweaker</h1>
-      <div class="subtitle">Drag to reorder, rename ID or Display Name, and toggle Hide for the global model catalog.</div>
+      <div class="subtitle">Drag to reorder, edit Display Name, and toggle Hide for the global model catalog.</div>
     </div>
     <div class="toolbar">
       <input type="password" id="mgmtKey" placeholder="Management Key (auto-detected if logged in)" style="width: 250px;">
@@ -417,10 +417,7 @@ const editorHTMLTemplate = `<!doctype html>
   <div class="grid">
     <div>
       <div class="card">
-        <h2>
-          <span>Model List</span>
-          <button class="sm" onclick="addBlankRule()">+ Add Custom Model</button>
-        </h2>
+        <h2><span>Model List</span></h2>
         <div class="top-controls">
           <input type="text" id="filterInput" placeholder="Filter models..." oninput="renderRulesTable()" style="max-width: 320px;">
         </div>
@@ -429,8 +426,7 @@ const editorHTMLTemplate = `<!doctype html>
             <tr>
               <th style="width:44px;">#</th>
               <th>Model ID</th>
-              <th>New ID (Optional)</th>
-              <th>Display Name (Optional)</th>
+              <th>Display Name</th>
               <th style="width:64px;text-align:center;">Hide</th>
             </tr>
           </thead>
@@ -441,9 +437,7 @@ const editorHTMLTemplate = `<!doctype html>
 
     <div>
       <div class="card">
-        <h2>
-          <span>Final Order Preview (Claude <code>/model</code>)</span>
-        </h2>
+        <h2><span>Final Order Preview (Claude <code>/model</code>)</span></h2>
         <ol id="previewList" class="preview-list"></ol>
       </div>
 
@@ -490,7 +484,6 @@ function initUI() {
     if (!existing.has(item.id.toLowerCase())) {
       state.config.models.push({
         id: item.id,
-        new_id: '',
         display_name: '',
         hidden: false
       });
@@ -524,7 +517,7 @@ function renderRulesTable() {
 
   state.config.models.forEach((rule, idx) => {
     const defName = defaultDisplayNameFor(rule.id);
-    const text = ((rule.id || '') + ' ' + (rule.new_id || '') + ' ' + (rule.display_name || '') + ' ' + defName).toLowerCase();
+    const text = ((rule.id || '') + ' ' + (rule.display_name || '') + ' ' + defName).toLowerCase();
     if (filter && !text.includes(filter)) return;
 
     const tr = document.createElement('tr');
@@ -544,9 +537,8 @@ function renderRulesTable() {
 
     tr.innerHTML =
       '<td><span class="drag-handle" title="Drag to reorder">☰</span>' + (idx + 1) + '</td>' +
-      '<td><input type="text" class="mono" value="' + escAttr(rule.id || '') + '" placeholder="e.g. gpt-5.4" oninput="updateRule(' + idx + ', \'id\', this.value)"></td>' +
-      '<td><input type="text" class="mono" value="' + escAttr(rule.new_id || '') + '" placeholder="' + escAttr(rule.id || 'keep original ID') + '" oninput="updateRule(' + idx + ', \'new_id\', this.value)"></td>' +
-      '<td><input type="text" value="' + escAttr(rule.display_name || '') + '" placeholder="' + escAttr(defName || 'keep default name') + '" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
+      '<td class="mono">' + escHTML(rule.id || '') + '</td>' +
+      '<td><input type="text" value="' + escAttr(rule.display_name || '') + '" placeholder="' + escAttr(defName || '') + '" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
       '<td style="text-align:center;"><input type="checkbox" ' + (rule.hidden ? 'checked' : '') + ' onchange="updateRule(' + idx + ', \'hidden\', this.checked); renderAll();"></td>';
     tbody.appendChild(tr);
   });
@@ -557,11 +549,6 @@ function updateRule(idx, field, val) {
   state.config.models[idx][field] = typeof val === 'string' ? val.trim() : val;
   renderPreview();
   renderYAML();
-}
-
-function addBlankRule() {
-  state.config.models.unshift({ id: '', new_id: '', display_name: '', hidden: false });
-  renderAll();
 }
 
 function cloakClaudeID(id) {
@@ -591,9 +578,8 @@ function renderPreview() {
     const id = (r.id || '').trim();
     if (!id || r.hidden) continue;
     const defName = defaultDisplayNameFor(id);
-    const rawNewID = (r.new_id || '').trim() || id;
-    const effectiveID = cloak ? cloakClaudeID(rawNewID) : rawNewID;
-    const effectiveName = (r.display_name || '').trim() || (r.new_id ? r.new_id.trim() : defName);
+    const effectiveID = cloak ? cloakClaudeID(id) : id;
+    const effectiveName = (r.display_name || '').trim() || defName;
 
     if (!cloak && !/(claude|anthropic)/i.test(effectiveID)) {
       continue;
@@ -601,7 +587,7 @@ function renderPreview() {
 
     const entry = {
       label: effectiveName,
-      id: effectiveID,
+      id: id,
       desc: 'From gateway',
       builtin: false
     };
@@ -630,7 +616,6 @@ function buildConfigObject() {
     .filter(r => (r.id || '').trim() !== '')
     .map(r => {
       const out = { id: r.id.trim() };
-      if (r.new_id && r.new_id.trim()) out.new_id = r.new_id.trim();
       if (r.display_name && r.display_name.trim()) out.display_name = r.display_name.trim();
       if (r.hidden) out.hidden = true;
       return out;
@@ -655,7 +640,6 @@ function renderYAML() {
   ];
   for (const m of cfg.models) {
     lines.push('        - id: ' + JSON.stringify(m.id));
-    if (m.new_id) lines.push('          new_id: ' + JSON.stringify(m.new_id));
     if (m.display_name) lines.push('          display_name: ' + JSON.stringify(m.display_name));
     if (m.hidden) lines.push('          hidden: true');
   }

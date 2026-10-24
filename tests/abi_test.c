@@ -79,7 +79,6 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 	require_contains(&plugin, "plugin.register", NULL, "response_interceptor");
-	require_contains(&plugin, "plugin.register", NULL, "model_router");
 	require_contains(&plugin, "plugin.register", NULL, "management_api");
 	require_contains(&plugin, "management.register", NULL, "Model List Tweaker");
 	plugin.shutdown();
