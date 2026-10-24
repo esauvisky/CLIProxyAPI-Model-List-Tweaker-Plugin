@@ -654,6 +654,12 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 			if matchesAnyHidePattern(item, cfg.Hide) {
 				continue
 			}
+			if isClaudeFormat && claudeCloakingActive {
+				item = cloneMap(item)
+				if id, ok := item["id"].(string); ok && id != "" {
+					item["id"] = ensureClaudeModelIDPrefix(id)
+				}
+			}
 			ordered = append(ordered, item)
 		}
 	}
@@ -827,6 +833,10 @@ func applyRuleToItem(item map[string]any, rule modelRule, isClaudeFormat, claude
 				out["id"] = newID
 			}
 		}
+	} else if isClaudeFormat && (claudeCloakingActive || strings.HasPrefix(rawID, claudeDDModelPrefix)) {
+		if id, ok := out["id"].(string); ok && id != "" {
+			out["id"] = ensureClaudeModelIDPrefix(id)
+		}
 	}
 	return out
 }
@@ -882,7 +892,10 @@ func reindexCodexPriorities(items []map[string]any) {
 }
 
 func ensureClaudeModelIDPrefix(id string) string {
-	if id == "" || strings.HasPrefix(id, "claude-") {
+	if id == "" {
+		return id
+	}
+	if strings.HasPrefix(id, claudeDDModelPrefix) {
 		return id
 	}
 	return claudeDDModelPrefix + reverseString(id)

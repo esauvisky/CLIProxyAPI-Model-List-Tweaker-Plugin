@@ -6,7 +6,7 @@
       "name": "Model List Tweaker",
       "description": "Reorder, rename (ID and display name), and hide models in the global model catalog across Claude Code, OpenAI, Codex, Gemini, and Grok clients, with a built-in web editor.",
       "author": "esauvisky",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "repository": "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin",
       "homepage": "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin",
       "license": "MIT",

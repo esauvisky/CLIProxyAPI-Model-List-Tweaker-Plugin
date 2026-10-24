@@ -664,7 +664,7 @@ function renderAvailableTable() {
 }
 
 function cloakClaudeID(id) {
-  if (!id || id.startsWith('claude-')) return id;
+  if (!id || id.startsWith('claude-fable-5-dd-')) return id;
   return 'claude-fable-5-dd-' + Array.from(id).reverse().join('');
 }
 

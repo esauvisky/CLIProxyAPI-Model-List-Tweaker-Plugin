@@ -65,16 +65,18 @@ models:
 	if parsed.Data[0].ID != wantFirstID || parsed.Data[0].DisplayName != "1. Codex 5.4" {
 		t.Fatalf("data[0] = %+v, want id=%q display_name=%q", parsed.Data[0], wantFirstID, "1. Codex 5.4")
 	}
-	// Second model: claude-opus-4-7
-	if parsed.Data[1].ID != "claude-opus-4-7" || parsed.Data[1].DisplayName != "2. Claude Opus 4.7" {
-		t.Fatalf("data[1] = %+v", parsed.Data[1])
+	// Second model: claude-opus-4-7 (cloaked so Claude Code does not split it below Sonnet/Haiku)
+	wantSecondID := ensureClaudeModelIDPrefix("claude-opus-4-7")
+	if parsed.Data[1].ID != wantSecondID || parsed.Data[1].DisplayName != "2. Claude Opus 4.7" {
+		t.Fatalf("data[1] = %+v, want id=%q", parsed.Data[1], wantSecondID)
 	}
-	// Third model: unlisted claude-sonnet-4-6 preserved at the end
-	if parsed.Data[2].ID != "claude-sonnet-4-6" {
-		t.Fatalf("data[2] = %+v, want claude-sonnet-4-6", parsed.Data[2])
+	// Third model: unlisted claude-sonnet-4-6 preserved at the end (also cloaked)
+	wantThirdID := ensureClaudeModelIDPrefix("claude-sonnet-4-6")
+	if parsed.Data[2].ID != wantThirdID {
+		t.Fatalf("data[2] = %+v, want %q", parsed.Data[2], wantThirdID)
 	}
-	if parsed.FirstID != wantFirstID || parsed.LastID != "claude-sonnet-4-6" {
-		t.Fatalf("pagination IDs = (%q, %q), want (%q, %q)", parsed.FirstID, parsed.LastID, wantFirstID, "claude-sonnet-4-6")
+	if parsed.FirstID != wantFirstID || parsed.LastID != wantThirdID {
+		t.Fatalf("pagination IDs = (%q, %q), want (%q, %q)", parsed.FirstID, parsed.LastID, wantFirstID, wantThirdID)
 	}
 }
 
