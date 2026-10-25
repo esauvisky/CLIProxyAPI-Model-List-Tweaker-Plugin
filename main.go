@@ -66,7 +66,7 @@ const (
 	schemaVersion uint32 = 6
 
 	pluginID      = "model-list-tweaker"
-	pluginVersion = "0.2.2"
+	pluginVersion = "0.3.0"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin"
 
@@ -78,6 +78,7 @@ const (
 	methodManagementRegister = "management.register"
 	methodManagementHandle   = "management.handle"
 	methodHostAuthModels     = "host.auth.models"
+	methodHostLog            = "host.log"
 )
 
 type envelope struct {

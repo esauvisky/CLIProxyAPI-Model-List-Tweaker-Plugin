@@ -115,6 +115,13 @@ func handleManagement(raw []byte) ([]byte, error) {
 			if nextCfg.Priority == 0 {
 				nextCfg.Priority = currentConfig().Priority
 			}
+			nextCfg = normalizeConfig(nextCfg)
+			if errQuota := validateQuotaConfig(nextCfg.Quota); errQuota != nil {
+				return okEnvelope(jsonManagementResponse(http.StatusBadRequest, map[string]any{
+					"error":   "invalid_config",
+					"message": errQuota.Error(),
+				}))
+			}
 			setPluginConfig(nextCfg)
 		}
 		return okEnvelope(jsonManagementResponse(http.StatusOK, buildUIState(req.HostCallbackID)))
@@ -680,7 +687,8 @@ function buildConfigObject() {
   return {
     enabled: true,
     priority: state.config.priority || 100,
-    models: models
+    models: models,
+    quota: state.config.quota
   };
 }
 
@@ -699,6 +707,13 @@ function renderYAML() {
     lines.push('        - id: ' + JSON.stringify(m.id));
     if (m.display_name) lines.push('          display_name: ' + JSON.stringify(m.display_name));
     if (m.hidden) lines.push('          hidden: true');
+  }
+  if (cfg.quota.enabled) {
+    lines.push('      quota:');
+    lines.push('        enabled: true');
+    lines.push('        management_url: ' + JSON.stringify(cfg.quota.management_url));
+    lines.push('        management_key: ' + JSON.stringify(cfg.quota.management_key));
+    lines.push('        refresh_minutes: ' + cfg.quota.refresh_minutes);
   }
   document.getElementById('yamlPreview').value = lines.join('\n');
 }

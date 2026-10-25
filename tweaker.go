@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -111,6 +115,14 @@ type pluginConfig struct {
 	Enabled  bool        `yaml:"enabled" json:"enabled"`
 	Priority int         `yaml:"priority" json:"priority"`
 	Models   []modelRule `yaml:"models" json:"models"`
+	Quota    quotaConfig `yaml:"quota" json:"quota"`
+}
+
+type quotaConfig struct {
+	Enabled        bool   `yaml:"enabled" json:"enabled"`
+	ManagementURL  string `yaml:"management_url" json:"management_url"`
+	ManagementKey  string `yaml:"management_key" json:"management_key"`
+	RefreshMinutes int    `yaml:"refresh_minutes" json:"refresh_minutes"`
 }
 
 type observedModelMeta struct {
@@ -127,6 +139,11 @@ var (
 	lastClaudeCloakingVal atomic.Bool
 
 	hostModelsResolver = fetchHostAuthModels
+
+	quotaMu         sync.RWMutex
+	quotaByModel    = make(map[string]float64)
+	quotaFetchedAt  time.Time
+	quotaRefreshing atomic.Bool
 )
 
 func init() {
@@ -139,6 +156,7 @@ func defaultPluginConfig() pluginConfig {
 		Enabled:  true,
 		Priority: 100,
 		Models:   []modelRule{},
+		Quota:    quotaConfig{RefreshMinutes: 5},
 	}
 }
 
@@ -153,7 +171,25 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 		cleanedModels = append(cleanedModels, rule)
 	}
 	cfg.Models = cleanedModels
+	cfg.Quota.ManagementURL = strings.TrimRight(strings.TrimSpace(cfg.Quota.ManagementURL), "/")
+	cfg.Quota.ManagementKey = strings.TrimSpace(cfg.Quota.ManagementKey)
 	return cfg
+}
+
+func validateQuotaConfig(q quotaConfig) error {
+	if !q.Enabled {
+		return nil
+	}
+	if q.ManagementURL == "" {
+		return fmt.Errorf("quota.management_url is required when quota.enabled is true")
+	}
+	if q.ManagementKey == "" {
+		return fmt.Errorf("quota.management_key is required when quota.enabled is true")
+	}
+	if q.RefreshMinutes <= 0 {
+		return fmt.Errorf("quota.refresh_minutes must be positive, got %d", q.RefreshMinutes)
+	}
+	return nil
 }
 
 func currentConfig() pluginConfig {
@@ -182,6 +218,9 @@ func configurePlugin(raw []byte) error {
 		}
 		cfg = decoded
 	}
+	if errQuota := validateQuotaConfig(cfg.Quota); errQuota != nil {
+		return errQuota
+	}
 	setPluginConfig(cfg)
 	return nil
 }
@@ -208,6 +247,11 @@ func pluginRegistration() registration {
 					Type:        "array",
 					Default:     []any{},
 					Description: "Ordered list of models ({id, display_name, hidden}).",
+				},
+				{
+					Name:        "quota",
+					Type:        "object",
+					Description: "Append remaining provider quota % to display names ({enabled, management_url, management_key, refresh_minutes}).",
 				},
 			},
 		},
@@ -326,7 +370,11 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 		lastClaudeCloakingVal.Store(claudeCloakingActive)
 	}
 
-	if len(cfg.Models) == 0 {
+	if cfg.Quota.Enabled {
+		maybeRefreshQuota(cfg.Quota)
+	}
+
+	if len(cfg.Models) == 0 && !cfg.Quota.Enabled {
 		return nil, false
 	}
 
@@ -364,6 +412,14 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 		ordered = append(ordered, item)
 	}
 
+	if cfg.Quota.Enabled {
+		quotaMu.RLock()
+		for _, item := range ordered {
+			appendQuotaSuffix(item, quotaByModel)
+		}
+		quotaMu.RUnlock()
+	}
+
 	if listKey == "models" {
 		reindexCodexPriorities(ordered)
 	}
@@ -389,6 +445,138 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 		return nil, false
 	}
 	return out, true
+}
+
+// maybeRefreshQuota starts a background refresh when the cache is stale, so the
+// current catalog request is served from the previous snapshot without waiting.
+func maybeRefreshQuota(q quotaConfig) {
+	quotaMu.RLock()
+	stale := time.Since(quotaFetchedAt) >= time.Duration(q.RefreshMinutes)*time.Minute
+	quotaMu.RUnlock()
+	if !stale || !quotaRefreshing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer quotaRefreshing.Store(false)
+		byModel, errFetch := fetchModelQuotas(q)
+		quotaMu.Lock()
+		quotaFetchedAt = time.Now()
+		if errFetch == nil {
+			quotaByModel = byModel
+		}
+		quotaMu.Unlock()
+		if errFetch != nil {
+			hostLog("error", "quota refresh failed: "+errFetch.Error())
+		}
+	}()
+}
+
+// fetchModelQuotas maps each model to the average, across the credentials serving it,
+// of each credential's lowest remaining bucket fraction.
+func fetchModelQuotas(q quotaConfig) (map[string]float64, error) {
+	credentials, errCreds := hostModelsResolver("")
+	if errCreds != nil {
+		return nil, errCreds
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	fractions := make(map[string][]float64)
+	for _, cred := range credentials {
+		remaining, hasQuota, errQuota := fetchCredentialRemaining(client, q, cred.AuthIndex)
+		if errQuota != nil {
+			hostLog("warn", fmt.Sprintf("quota fetch for credential %s (%s) failed: %v", cred.AuthIndex, cred.Provider, errQuota))
+			continue
+		}
+		if !hasQuota {
+			continue
+		}
+		for _, model := range cred.Models {
+			fractions[model] = append(fractions[model], remaining)
+		}
+	}
+	byModel := make(map[string]float64, len(fractions))
+	for model, values := range fractions {
+		sum := 0.0
+		for _, v := range values {
+			sum += v
+		}
+		byModel[model] = sum / float64(len(values))
+	}
+	return byModel, nil
+}
+
+type managementQuotaResponse struct {
+	Groups []struct {
+		Buckets []struct {
+			RemainingFraction float64 `json:"remainingFraction"`
+		} `json:"buckets"`
+	} `json:"groups"`
+}
+
+// fetchCredentialRemaining returns hasQuota=false when the credential has no quota
+// provider (HTTP 501) or reports only balances without buckets.
+func fetchCredentialRemaining(client *http.Client, q quotaConfig, authIndex string) (float64, bool, error) {
+	payload, errMarshal := json.Marshal(map[string]string{"auth_index": authIndex})
+	if errMarshal != nil {
+		return 0, false, errMarshal
+	}
+	req, errReq := http.NewRequest(http.MethodPost, q.ManagementURL+"/v0/management/quota/fetch", bytes.NewReader(payload))
+	if errReq != nil {
+		return 0, false, errReq
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+q.ManagementKey)
+	resp, errDo := client.Do(req)
+	if errDo != nil {
+		return 0, false, errDo
+	}
+	defer resp.Body.Close()
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		return 0, false, errRead
+	}
+	if resp.StatusCode == http.StatusNotImplemented {
+		return 0, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var parsed managementQuotaResponse
+	if errUnmarshal := json.Unmarshal(body, &parsed); errUnmarshal != nil {
+		return 0, false, errUnmarshal
+	}
+	lowest := math.Inf(1)
+	for _, group := range parsed.Groups {
+		for _, bucket := range group.Buckets {
+			lowest = math.Min(lowest, bucket.RemainingFraction)
+		}
+	}
+	if math.IsInf(lowest, 1) {
+		return 0, false, nil
+	}
+	return lowest, true, nil
+}
+
+func appendQuotaSuffix(item map[string]any, quotas map[string]float64) {
+	canonicalID, _, _ := extractItemIdentifiers(item)
+	remaining, ok := quotas[canonicalID]
+	if !ok {
+		return
+	}
+	key := "display_name"
+	if _, hasCamel := item["displayName"]; hasCamel {
+		key = "displayName"
+	} else if _, hasSnake := item["display_name"]; !hasSnake {
+		// OpenAI-style catalogs carry no display name to annotate.
+		return
+	}
+	name, _ := item[key].(string)
+	item[key] = fmt.Sprintf("%s (%d%%)", name, int(math.Round(remaining*100)))
+}
+
+func hostLog(level, message string) {
+	if _, errLog := callHost(methodHostLog, map[string]string{"level": level, "message": "[" + pluginID + "] " + message}); errLog != nil {
+		panic(fmt.Sprintf("host.log failed: %v (original message: %s)", errLog, message))
+	}
 }
 
 func recordObservedModels(items []map[string]any) {

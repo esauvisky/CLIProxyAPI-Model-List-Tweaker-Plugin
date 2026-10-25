@@ -41,3 +41,16 @@ plugins:
         - id: "claude-haiku-4-5"
           hidden: true
 ```
+
+## Remaining quota in display names
+
+With `quota.enabled`, display names get the remaining quota appended, e.g. `Claude Opus 4.7 (63%)`. Per credential the lowest bucket (5h, weekly, ...) counts; models served by several credentials show the average. Values come from the management API (`POST /v0/management/quota/fetch`), so a management key is required. A catalog request older than `refresh_minutes` since the last refresh triggers a background refresh and is served from the previous snapshot. Models without a quota provider get no suffix.
+
+```yaml
+    model-list-tweaker:
+      quota:
+        enabled: true
+        management_url: "http://127.0.0.1:8317"
+        management_key: "your-management-key"
+        refresh_minutes: 5
+```
