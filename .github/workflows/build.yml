@@ -8,42 +8,50 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Build and test
+        run: make test
+
   plugin:
+    needs: test
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            artifact: linux-amd64
-            goos: linux
-            goarch: amd64
-          - runner: ubuntu-24.04-arm
-            artifact: linux-arm64
-            goos: linux
-            goarch: arm64
+          - { runner: ubuntu-latest,    goos: linux,   goarch: amd64, lib: model-list-tweaker.so }
+          - { runner: ubuntu-24.04-arm, goos: linux,   goarch: arm64, lib: model-list-tweaker.so }
+          - { runner: macos-latest,     goos: darwin,  goarch: arm64, lib: model-list-tweaker.dylib, cc: "clang -arch arm64" }
+          - { runner: macos-latest,     goos: darwin,  goarch: amd64, lib: model-list-tweaker.dylib, cc: "clang -arch x86_64" }
+          - { runner: windows-latest,   goos: windows, goarch: amd64, lib: model-list-tweaker.dll }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
-      - name: Build and test
-        run: make test
-      - name: Name release artifact
-        run: cp build/model-list-tweaker.so build/model-list-tweaker-${{ matrix.artifact }}.so
-      - name: Package Plugin Store archive
-        if: startsWith(github.ref, 'refs/tags/v')
+          check-latest: true
+      - name: Build shared library
+        shell: bash
         env:
-          RELEASE_VERSION: ${{ github.ref_name }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "1"
+          CC: ${{ matrix.cc }}
         run: |
-          version="${RELEASE_VERSION#v}"
-          archive="model-list-tweaker_${version}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
-          (cd build && zip "$archive" model-list-tweaker.so)
+          mkdir -p build
+          go build -trimpath -buildvcs=false -buildmode=c-shared -o "build/${{ matrix.lib }}" .
+          test -s "build/${{ matrix.lib }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: model-list-tweaker-${{ matrix.artifact }}
-          path: |
-            build/model-list-tweaker-${{ matrix.artifact }}.so
-            build/model-list-tweaker_*.zip
+          name: lib-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: build/${{ matrix.lib }}
           if-no-files-found: error
 
   release:
@@ -55,18 +63,25 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: model-list-tweaker-*
           path: artifacts
-          merge-multiple: true
-      - name: Publish release
+      - name: Package Plugin Store archives and publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd artifacts
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for dir in artifacts/lib-*; do
+            target="$(basename "$dir")"
+            rest="${target#lib-}"
+            goos="${rest%-*}"
+            goarch="${rest##*-}"
+            zip -9 -j "dist/model-list-tweaker_${version}_${goos}_${goarch}.zip" "$dir"/*
+          done
+          cd dist
           sha256sum model-list-tweaker_*.zip > checksums.txt
+          cat checksums.txt
           gh release create "$GITHUB_REF_NAME" \
-            model-list-tweaker-linux-amd64.so \
-            model-list-tweaker-linux-arm64.so \
             model-list-tweaker_*.zip \
             checksums.txt \
             --repo "$GITHUB_REPOSITORY" \

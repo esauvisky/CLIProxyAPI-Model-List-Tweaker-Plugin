@@ -92,63 +92,48 @@ func handleManagement(raw []byte) ([]byte, error) {
 		}
 	}
 
-	op := ""
-	if req.Query != nil {
-		op = strings.ToLower(strings.TrimSpace(req.Query.Get("op")))
-	}
-
-	if strings.EqualFold(req.Method, http.MethodPost) || op == "apply" {
-		bodyBytes := req.Body
-		if len(bodyBytes) == 0 && req.Query != nil {
-			if rawCfg := req.Query.Get("config"); rawCfg != "" {
-				bodyBytes = []byte(rawCfg)
+	cleanedPath := strings.TrimRight(strings.TrimSpace(req.Path), "/")
+	if strings.HasSuffix(cleanedPath, mgmtStateRoutePath) {
+		if strings.EqualFold(req.Method, http.MethodPost) {
+			if len(req.Body) > 0 {
+				var nextCfg pluginConfig
+				if errUnmarshal := json.Unmarshal(req.Body, &nextCfg); errUnmarshal != nil {
+					return okEnvelope(jsonManagementResponse(http.StatusBadRequest, map[string]any{
+						"error":   "invalid_config",
+						"message": errUnmarshal.Error(),
+					}))
+				}
+				if !nextCfg.Enabled {
+					nextCfg.Enabled = true
+				}
+				if nextCfg.Priority == 0 {
+					nextCfg.Priority = currentConfig().Priority
+				}
+				nextCfg = normalizeConfig(nextCfg)
+				if errQuota := validateQuotaConfig(nextCfg.Quota); errQuota != nil {
+					return okEnvelope(jsonManagementResponse(http.StatusBadRequest, map[string]any{
+						"error":   "invalid_config",
+						"message": errQuota.Error(),
+					}))
+				}
+				setPluginConfig(nextCfg)
+				if nextCfg.Quota.Enabled {
+					maybeRefreshQuota(nextCfg.Quota)
+				}
 			}
-		}
-		if len(bodyBytes) > 0 {
-			var nextCfg pluginConfig
-			if errUnmarshal := json.Unmarshal(bodyBytes, &nextCfg); errUnmarshal != nil {
-				return okEnvelope(jsonManagementResponse(http.StatusBadRequest, map[string]any{
-					"error":   "invalid_config",
-					"message": errUnmarshal.Error(),
-				}))
-			}
-			if !nextCfg.Enabled {
-				nextCfg.Enabled = true
-			}
-			if nextCfg.Priority == 0 {
-				nextCfg.Priority = currentConfig().Priority
-			}
-			nextCfg = normalizeConfig(nextCfg)
-			if errQuota := validateQuotaConfig(nextCfg.Quota); errQuota != nil {
-				return okEnvelope(jsonManagementResponse(http.StatusBadRequest, map[string]any{
-					"error":   "invalid_config",
-					"message": errQuota.Error(),
-				}))
-			}
-			setPluginConfig(nextCfg)
-			if nextCfg.Quota.Enabled {
-				maybeRefreshQuota(nextCfg.Quota)
-			}
+			return okEnvelope(jsonManagementResponse(http.StatusOK, buildUIState(req.HostCallbackID)))
 		}
 		return okEnvelope(jsonManagementResponse(http.StatusOK, buildUIState(req.HostCallbackID)))
 	}
 
-	if op == "state" || strings.HasSuffix(strings.TrimRight(req.Path, "/"), mgmtStateRoutePath) {
-		return okEnvelope(jsonManagementResponse(http.StatusOK, buildUIState(req.HostCallbackID)))
-	}
-
-	state := buildUIState(req.HostCallbackID)
-	page, errPage := renderEditorHTML(state)
-	if errPage != nil {
-		return nil, errPage
-	}
+	// /v0/resource/plugins/model-list-tweaker/ui serves only the static UI asset.
 	return okEnvelope(managementResponse{
 		StatusCode: http.StatusOK,
 		Headers: http.Header{
 			"Content-Type":  []string{"text/html; charset=utf-8"},
 			"Cache-Control": []string{"no-store"},
 		},
-		Body: page,
+		Body: []byte(editorHTMLTemplate),
 	})
 }
 
@@ -252,15 +237,6 @@ func jsonManagementResponse(status int, payload any) managementResponse {
 		},
 		Body: raw,
 	}
-}
-
-func renderEditorHTML(initialState uiStatePayload) ([]byte, error) {
-	stateJSON, errMarshal := marshalJSONNoEscape(initialState)
-	if errMarshal != nil {
-		return nil, errMarshal
-	}
-	htmlDoc := strings.Replace(editorHTMLTemplate, "__INITIAL_STATE_JSON__", string(stateJSON), 1)
-	return []byte(htmlDoc), nil
 }
 
 var _ = fmt.Sprint
@@ -767,7 +743,8 @@ const editorHTMLTemplate = `<!doctype html>
 </main>
 
 <script>
-let state = __INITIAL_STATE_JSON__;
+const STATE_API_URL = '/v0/management/plugins/model-list-tweaker/state';
+let state = { config: { enabled: true, priority: 100, models: [] }, available: [], claude_cloaking: true, quota_by_model: {} };
 let dragIndex = null;
 
 function syncThemeWithCPA() {
@@ -844,8 +821,7 @@ function detectStoredManagementKey() {
   return '';
 }
 
-function initUI() {
-  syncThemeWithCPA();
+function hydrateState() {
   if (!state.config) state.config = { enabled: true, priority: 100, models: [] };
   if (!Array.isArray(state.config.models)) state.config.models = [];
   if (!Array.isArray(state.available)) state.available = [];
@@ -861,7 +837,11 @@ function initUI() {
       existing.add(item.id.toLowerCase());
     }
   }
+  renderAll();
+}
 
+function initUI() {
+  syncThemeWithCPA();
   const keyInput = document.getElementById('mgmtKey');
   const detectedKey = detectStoredManagementKey();
   if (detectedKey) {
@@ -870,8 +850,8 @@ function initUI() {
   } else if (!keyInput.value) {
     keyInput.style.display = 'inline-block';
   }
-
-  renderAll();
+  hydrateState();
+  void refreshFromServer(true);
 }
 
 function renderAll() {
@@ -1101,30 +1081,54 @@ async function copyYAML() {
   showStatus('Copied YAML snippet to clipboard.', true);
 }
 
-async function refreshFromServer() {
-  try {
-    const resp = await fetch('?op=state', { cache: 'no-store' });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    state = await resp.json();
-    initUI();
-    showStatus('Refreshed model catalog from server.', true);
-  } catch (err) {
-    showStatus('Failed to refresh state: ' + err.message, false);
-  }
-}
-
-async function saveConfig() {
-  const cfg = buildConfigObject();
+function authHeaders() {
   const key = (document.getElementById('mgmtKey').value || detectStoredManagementKey() || '').trim();
   const headers = { 'Content-Type': 'application/json' };
   if (key) {
     headers['Authorization'] = 'Bearer ' + key;
     headers['X-Management-Key'] = key;
   }
+  return headers;
+}
+
+async function refreshFromServer(silent) {
+  try {
+    const resp = await fetch(STATE_API_URL, {
+      method: 'GET',
+      headers: authHeaders(),
+      cache: 'no-store'
+    });
+    if (resp.status === 401 || resp.status === 403) {
+      document.getElementById('mgmtKey').style.display = 'inline-block';
+      throw new Error('Management key required (HTTP ' + resp.status + ')');
+    }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    state = await resp.json();
+    hydrateState();
+    if (!silent) showStatus('Refreshed model catalog from server.', true);
+  } catch (err) {
+    showStatus('Failed to load state: ' + err.message, false);
+  }
+}
+
+async function saveConfig() {
+  const cfg = buildConfigObject();
+  const headers = authHeaders();
 
   try {
-    const runtimeResp = await fetch('?op=apply&config=' + encodeURIComponent(JSON.stringify(cfg)), { cache: 'no-store' });
+    const runtimeResp = await fetch(STATE_API_URL, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(cfg),
+      cache: 'no-store'
+    });
+    if (runtimeResp.status === 401 || runtimeResp.status === 403) {
+      document.getElementById('mgmtKey').style.display = 'inline-block';
+      throw new Error('Management key required (HTTP ' + runtimeResp.status + ')');
+    }
     if (!runtimeResp.ok) throw new Error('Runtime apply failed: HTTP ' + runtimeResp.status);
+    state = await runtimeResp.json();
+    hydrateState();
 
     let persisted = false;
     for (const endpoint of ['/v8/management/config/plugins/configs/model-list-tweaker', '/v0/management/plugins/model-list-tweaker/config']) {
