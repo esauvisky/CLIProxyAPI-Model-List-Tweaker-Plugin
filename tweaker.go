@@ -241,6 +241,7 @@ func pluginRegistration() registration {
 			Version:          pluginVersion,
 			Author:           pluginAuthor,
 			GitHubRepository: pluginRepo,
+			Logo:             pluginLogo,
 			ConfigFields: []configField{
 				{
 					Name:        "models",
