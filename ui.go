@@ -242,63 +242,14 @@ func jsonManagementResponse(status int, payload any) managementResponse {
 var _ = fmt.Sprint
 
 const editorHTMLTemplate = `<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Model List Tweaker</title>
 <style>
-  :root {
-    --bg-secondary: #faf9f5;
-    --bg-primary: #f0eee8;
-    --bg-tertiary: #e9e6df;
-    --bg-hover: #e9e6df;
-    --bg-quinary: #f6f4ee;
-    --text-primary: #2d2a26;
-    --text-secondary: #6d6760;
-    --text-tertiary: #a29c95;
-    --text-quaternary: #c0bab3;
-    --border-color: #e3e1db;
-    --border-primary: #d5d2cb;
-    --border-hover: #cecac4;
-    --primary-color: #8b8680;
-    --primary-hover: #7f7a74;
-    --primary-active: #726d67;
-    --primary-contrast: #ffffff;
-    --success-color: #10b981;
-    --quota-medium-color: #e0aa14;
-    --warning-color: #c65746;
-    --error-color: #c65746;
-    --viz-success: #10b981;
-    --viz-failure: #c65746;
-    --success-badge-bg: #d1fae5;
-    --success-badge-text: #065f46;
-    --success-badge-border: #6ee7b7;
-    --failure-badge-bg: rgba(198, 87, 70, 0.14);
-    --failure-badge-text: #8a3a30;
-    --failure-badge-border: rgba(198, 87, 70, 0.35);
-    --count-badge-bg: rgba(139, 134, 128, 0.18);
-    --count-badge-text: #726d67;
-    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-    --radius-sm: 4px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --radius-full: 9999px;
-    --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
-  }
-
-  [data-theme='white'] {
-    --bg-secondary: #ffffff;
-    --bg-primary: #ffffff;
-    --bg-tertiary: #f6f6f6;
-    --bg-hover: #f6f6f6;
-    --bg-quinary: #ffffff;
-    --border-color: #e5e5e5;
-    --border-primary: #d9d9d9;
-    --border-hover: #cccccc;
-  }
-
-  [data-theme='dark'] {
+  /* CPA Dark Theme (Default) */
+  :root, [data-theme='dark'] {
     --bg-secondary: #151412;
     --bg-primary: #1d1b18;
     --bg-tertiary: #262320;
@@ -315,7 +266,10 @@ const editorHTMLTemplate = `<!doctype html>
     --primary-hover: #9a948e;
     --primary-active: #a6a099;
     --primary-contrast: #ffffff;
+    --success-color: #10b981;
     --quota-medium-color: #ffd862;
+    --warning-color: #c65746;
+    --error-color: #c65746;
     --viz-success: #0fae78;
     --viz-failure: #cf4b3a;
     --success-badge-bg: rgba(6, 78, 59, 0.3);
@@ -327,6 +281,75 @@ const editorHTMLTemplate = `<!doctype html>
     --count-badge-bg: rgba(139, 134, 128, 0.28);
     --count-badge-text: #a6a099;
     --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.3);
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-full: 9999px;
+    --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  }
+
+  /* CPA Warm-Stone Light Theme */
+  [data-theme='light'] {
+    --bg-secondary: #faf9f5;
+    --bg-primary: #f0eee8;
+    --bg-tertiary: #e9e6df;
+    --bg-hover: #e9e6df;
+    --bg-quinary: #f6f4ee;
+    --text-primary: #2d2a26;
+    --text-secondary: #6d6760;
+    --text-tertiary: #a29c95;
+    --text-quaternary: #c0bab3;
+    --border-color: #e3e1db;
+    --border-primary: #d5d2cb;
+    --border-hover: #cecac4;
+    --primary-color: #8b8680;
+    --primary-hover: #7f7a74;
+    --primary-active: #726d67;
+    --primary-contrast: #ffffff;
+    --quota-medium-color: #e0aa14;
+    --viz-success: #10b981;
+    --viz-failure: #c65746;
+    --success-badge-bg: #d1fae5;
+    --success-badge-text: #065f46;
+    --success-badge-border: #6ee7b7;
+    --failure-badge-bg: rgba(198, 87, 70, 0.14);
+    --failure-badge-text: #8a3a30;
+    --failure-badge-border: rgba(198, 87, 70, 0.35);
+    --count-badge-bg: rgba(139, 134, 128, 0.18);
+    --count-badge-text: #726d67;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+
+  /* CPA Pure White Theme */
+  [data-theme='white'] {
+    --bg-secondary: #ffffff;
+    --bg-primary: #ffffff;
+    --bg-tertiary: #f6f6f6;
+    --bg-hover: #f6f6f6;
+    --bg-quinary: #ffffff;
+    --text-primary: #2d2a26;
+    --text-secondary: #6d6760;
+    --text-tertiary: #a29c95;
+    --text-quaternary: #c0bab3;
+    --border-color: #e5e5e5;
+    --border-primary: #d9d9d9;
+    --border-hover: #cccccc;
+    --primary-color: #8b8680;
+    --primary-hover: #7f7a74;
+    --primary-active: #726d67;
+    --primary-contrast: #ffffff;
+    --quota-medium-color: #e0aa14;
+    --viz-success: #10b981;
+    --viz-failure: #c65746;
+    --success-badge-bg: #d1fae5;
+    --success-badge-text: #065f46;
+    --success-badge-border: #6ee7b7;
+    --failure-badge-bg: rgba(198, 87, 70, 0.14);
+    --failure-badge-text: #8a3a30;
+    --failure-badge-border: rgba(198, 87, 70, 0.35);
+    --count-badge-bg: rgba(139, 134, 128, 0.18);
+    --count-badge-text: #726d67;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
 
   * { box-sizing: border-box; }
@@ -346,18 +369,20 @@ const editorHTMLTemplate = `<!doctype html>
   ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 9999px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
 
-  .main-content {
+  /* Matches CPA .main-content + PluginsPage.module.scss */
+  .page {
     padding: 70px clamp(20px, 3vw, 48px) 40px;
     display: flex;
     flex-direction: column;
     gap: 20px;
-    max-width: 100%;
+    width: 100%;
   }
 
   .page-header {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
+    padding-right: 180px; /* Keep clear of CPA's floating top-right header-actions pill */
   }
   .page-title {
     margin: 0;
@@ -365,29 +390,23 @@ const editorHTMLTemplate = `<!doctype html>
     font-size: 28px;
     font-weight: 700;
     line-height: 1.2;
-    letter-spacing: -0.01em;
   }
   .page-desc {
     margin: 0;
     color: var(--text-secondary);
     font-size: 14px;
+    line-height: 1.5;
   }
 
+  /* Matches CPA PluginsPage .statusBar */
   .status-bar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    gap: 10px;
     padding: 10px 14px;
     border-radius: 10px;
-    border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
-    background: var(--bg-primary);
-    flex-wrap: wrap;
-  }
-  .status-pills {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    background: color-mix(in srgb, var(--bg-secondary) 60%, transparent);
     flex-wrap: wrap;
   }
   .status-pill {
@@ -396,8 +415,8 @@ const editorHTMLTemplate = `<!doctype html>
     gap: 6px;
     padding: 5px 12px;
     border-radius: var(--radius-full);
-    border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
-    background: var(--bg-secondary);
+    border: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
+    background: color-mix(in srgb, var(--bg-primary) 56%, transparent);
     font-size: 12px;
     font-weight: 600;
     white-space: nowrap;
@@ -408,15 +427,27 @@ const editorHTMLTemplate = `<!doctype html>
     border-radius: 50%;
     background: var(--success-color);
     box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+    flex-shrink: 0;
+  }
+  .status-divider {
+    width: 1px;
+    height: 20px;
+    background: color-mix(in srgb, var(--border-color) 60%, transparent);
+    flex-shrink: 0;
   }
   .status-label { color: var(--text-secondary); }
   .status-value { color: var(--text-primary); font-weight: 700; }
 
+  /* Matches CPA PluginsPage .toolbar: left-aligned search + buttons, never in top-right */
   .toolbar {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+  .toolbar .search-input {
+    flex: 1 1 260px;
+    max-width: 420px;
   }
 
   .btn {
@@ -426,7 +457,7 @@ const editorHTMLTemplate = `<!doctype html>
     gap: 6px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 8px 14px;
+    padding: 8px 12px;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -457,7 +488,7 @@ const editorHTMLTemplate = `<!doctype html>
     width: 100%;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 6px 10px;
+    padding: 7px 11px;
     font-size: 13px;
     background-color: var(--bg-secondary);
     color: var(--text-primary);
@@ -499,26 +530,29 @@ const editorHTMLTemplate = `<!doctype html>
     .grid { grid-template-columns: 1fr; }
   }
 
-  .card {
-    background: var(--bg-primary);
+  /* Matches CPA OAuthConfigPanels .panel */
+  .panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: clamp(16px, 2vw, 20px);
+    border-radius: 16px;
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 16px;
-    box-shadow: var(--shadow-sm);
+    background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
   }
-  .card-header {
+  .panel-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: 10px;
     padding-bottom: 10px;
-    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 65%, transparent);
   }
-  .card-title {
+  .panel-title {
     margin: 0;
     font-size: 15px;
-    font-weight: 700;
+    font-weight: 650;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
   }
 
@@ -545,7 +579,7 @@ const editorHTMLTemplate = `<!doctype html>
     transition: background-color 120ms ease, opacity 120ms ease;
   }
   tbody tr:hover {
-    background-color: color-mix(in srgb, var(--bg-tertiary) 65%, transparent);
+    background-color: var(--bg-hover);
   }
   tr.dragging { opacity: 0.4; }
   tr.hidden-row { opacity: 0.48; }
@@ -583,7 +617,7 @@ const editorHTMLTemplate = `<!doctype html>
     position: absolute;
   }
   .switch-track {
-    width: 36px;
+    width: 38px;
     height: 20px;
     background: var(--border-primary);
     border-radius: var(--radius-full);
@@ -602,10 +636,10 @@ const editorHTMLTemplate = `<!doctype html>
     transition: transform 180ms var(--ease-out-strong);
   }
   .switch input:checked + .switch-track {
-    background: var(--warning-color);
+    background: var(--primary-color);
   }
   .switch input:checked + .switch-track .switch-thumb {
-    transform: translateX(16px);
+    transform: translateX(18px);
   }
 
   .preview-list {
@@ -619,11 +653,13 @@ const editorHTMLTemplate = `<!doctype html>
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 8px;
-    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 55%, transparent);
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 65%, transparent);
+    background: color-mix(in srgb, var(--bg-secondary) 45%, transparent);
+    margin-bottom: 5px;
     white-space: nowrap;
   }
-  .preview-list li:last-child { border-bottom: 0; }
   .preview-num {
     width: 24px;
     color: var(--text-tertiary);
@@ -634,82 +670,88 @@ const editorHTMLTemplate = `<!doctype html>
   }
   .preview-list li.builtin-item {
     color: var(--text-secondary);
-    background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+    background: transparent;
+    border-style: dashed;
   }
 
   .badge {
     display: inline-flex;
+    min-height: 20px;
     align-items: center;
     padding: 2px 8px;
     font-size: 11px;
     font-weight: 600;
-    border-radius: var(--radius-full);
-    background: var(--count-badge-bg);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
     color: var(--text-secondary);
     white-space: nowrap;
   }
   .badge.builtin {
-    background: transparent;
-    border: 1px solid var(--border-color);
     color: var(--text-tertiary);
   }
   .badge.quota-high {
-    background: var(--success-badge-bg);
-    color: var(--success-badge-text);
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.25);
+    color: var(--success-color);
   }
   .badge.quota-low {
-    background: var(--failure-badge-bg);
-    color: var(--failure-badge-text);
+    background: rgba(198, 87, 70, 0.12);
+    border-color: rgba(198, 87, 70, 0.25);
+    color: var(--warning-color);
   }
 
   .mono {
     font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
     font-size: 12px;
   }
-  .muted { color: var(--text-secondary); }
   .subtle { color: var(--text-tertiary); }
 </style>
 </head>
 <body>
-<main class="main-content">
+<main class="page">
   <header class="page-header">
     <h1 class="page-title">Model List Tweaker</h1>
     <p class="page-desc">Drag rows to reorder, customize display names, and toggle visibility across the global model catalog.</p>
   </header>
 
   <div class="status-bar">
-    <div class="status-pills">
-      <span class="status-pill">
-        <span class="status-dot"></span>
-        <span class="status-label">Visible</span>
-        <span class="status-value" id="visibleCount">0</span>
-      </span>
-      <span class="status-pill">
-        <span class="status-label">Hidden</span>
-        <span class="status-value" id="hiddenCount">0</span>
-      </span>
-      <span class="status-pill">
-        <span class="status-label">Total</span>
-        <span class="status-value" id="totalCount">0</span>
-      </span>
+    <div class="status-pill">
+      <span class="status-dot"></span>
+      <span class="status-label">Visible</span>
+      <span class="status-value" id="visibleCount">0</span>
     </div>
-    <div class="toolbar">
-      <input type="password" id="mgmtKey" class="input" placeholder="Management Key" style="width: 190px; display: none;">
-      <button class="btn" onclick="refreshFromServer()">Refresh</button>
-      <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+    <span class="status-divider"></span>
+    <div class="status-pill">
+      <span class="status-label">Hidden</span>
+      <span class="status-value" id="hiddenCount">0</span>
     </div>
+    <span class="status-divider"></span>
+    <div class="status-pill">
+      <span class="status-label">Total</span>
+      <span class="status-value" id="totalCount">0</span>
+    </div>
+    <span class="status-divider"></span>
+    <div class="status-pill">
+      <span class="status-label">Claude Catalog</span>
+      <span class="status-value" id="cloakBadge">Cloaked</span>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <input type="search" id="filterInput" class="input search-input" placeholder="Search model ID or display name..." oninput="renderRulesTable()">
+    <input type="password" id="mgmtKey" class="input" placeholder="Management Key" style="width: 180px; display: none;">
+    <button class="btn" id="toggleAllBtn" onclick="toggleHideAll()">Hide All</button>
+    <button class="btn" onclick="refreshFromServer(false)">Refresh</button>
+    <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
   </div>
 
   <div id="statusBar" class="notice"></div>
 
   <div class="grid">
-    <section class="card">
-      <div class="card-header">
-        <h2 class="card-title">Model Catalog</h2>
-        <button class="btn btn-sm" id="toggleAllBtn" onclick="toggleHideAll()">Hide All</button>
-      </div>
-      <div style="margin-bottom: 10px;">
-        <input type="text" id="filterInput" class="input" placeholder="Search model ID or display name..." oninput="renderRulesTable()">
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">Model Catalog</h2>
       </div>
       <table>
         <thead>
@@ -724,18 +766,17 @@ const editorHTMLTemplate = `<!doctype html>
       </table>
     </section>
 
-    <section class="card">
-      <div class="card-header">
-        <h2 class="card-title">Final Order Preview (Claude <code>/model</code>)</h2>
-        <span class="badge" id="cloakBadge">Cloaked</span>
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">Final Order Preview (Claude <code>/model</code>)</h2>
       </div>
       <ol id="previewList" class="preview-list"></ol>
     </section>
   </div>
 
-  <section class="card">
-    <div class="card-header">
-      <h2 class="card-title">Configuration YAML (<code>config.yaml</code>)</h2>
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">Configuration YAML (<code>config.yaml</code>)</h2>
       <button class="btn btn-sm" onclick="copyYAML()">Copy YAML</button>
     </div>
     <textarea id="yamlPreview" rows="12" class="mono" readonly></textarea>
@@ -749,18 +790,25 @@ let dragIndex = null;
 
 function syncThemeWithCPA() {
   const apply = (mode) => {
-    if (mode === 'dark') {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    } else if (mode === 'white') {
+    if (mode === 'white') {
       document.documentElement.setAttribute('data-theme', 'white');
+    } else if (mode === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
     } else {
-      document.documentElement.removeAttribute('data-theme');
+      document.documentElement.setAttribute('data-theme', 'dark');
     }
   };
   try {
     if (window.parent && window.parent !== window && window.parent.document) {
       const parentDoc = window.parent.document.documentElement;
-      const syncFromParent = () => apply(parentDoc.getAttribute('data-theme'));
+      const syncFromParent = () => {
+        const attr = parentDoc.getAttribute('data-theme');
+        if (attr === 'dark' || attr === 'white') {
+          apply(attr);
+        } else {
+          apply('light');
+        }
+      };
       syncFromParent();
       new MutationObserver(syncFromParent).observe(parentDoc, { attributes: true, attributeFilter: ['data-theme'] });
       return;
@@ -771,15 +819,22 @@ function syncThemeWithCPA() {
     if (raw) {
       const parsed = JSON.parse(raw);
       const t = parsed?.state?.theme;
-      if (t === 'dark' || t === 'white' || t === 'light') {
-        apply(t);
+      const resolved = parsed?.state?.resolvedTheme;
+      if (t === 'dark' || (t === 'auto' && resolved === 'dark')) {
+        apply('dark');
+        return;
+      }
+      if (t === 'white' || (t === 'auto' && resolved !== 'dark')) {
+        apply('white');
+        return;
+      }
+      if (t === 'light') {
+        apply('light');
         return;
       }
     }
   } catch (_) {}
-  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    apply('dark');
-  }
+  apply(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 }
 
 function deobfuscateCPASecret(payload) {
@@ -962,7 +1017,7 @@ function renderPreview() {
   const cloak = state.claude_cloaking !== false;
   const cloakBadge = document.getElementById('cloakBadge');
   if (cloakBadge) {
-    cloakBadge.textContent = cloak ? 'Cloaking Active' : 'Uncloaked';
+    cloakBadge.textContent = cloak ? 'Cloaked' : 'Uncloaked';
   }
   list.innerHTML = '';
 
