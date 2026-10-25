@@ -67,7 +67,7 @@ const (
 
 	pluginID      = "model-list-tweaker"
 	pluginName    = "Model List Tweaker"
-	pluginVersion = "0.3.2"
+	pluginVersion = "0.3.3"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin"
 	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin/main/assets/logo.png"

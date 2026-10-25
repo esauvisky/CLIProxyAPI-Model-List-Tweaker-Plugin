@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -55,6 +57,7 @@ type uiStatePayload struct {
 	Config         pluginConfig      `json:"config"`
 	Available      []discoveredModel `json:"available"`
 	ClaudeCloaking bool              `json:"claude_cloaking"`
+	QuotaByModel   map[string]int    `json:"quota_by_model,omitempty"`
 }
 
 func managementRegistrationPayload() managementRegistration {
@@ -123,6 +126,9 @@ func handleManagement(raw []byte) ([]byte, error) {
 				}))
 			}
 			setPluginConfig(nextCfg)
+			if nextCfg.Quota.Enabled {
+				maybeRefreshQuota(nextCfg.Quota)
+			}
 		}
 		return okEnvelope(jsonManagementResponse(http.StatusOK, buildUIState(req.HostCallbackID)))
 	}
@@ -148,6 +154,9 @@ func handleManagement(raw []byte) ([]byte, error) {
 
 func buildUIState(hostCallbackID string) uiStatePayload {
 	cfg := currentConfig()
+	if cfg.Quota.Enabled {
+		maybeRefreshQuota(cfg.Quota)
+	}
 	byID := make(map[string]*discoveredModel)
 
 	if credentials, errFetch := hostModelsResolver(hostCallbackID); errFetch == nil {
@@ -206,10 +215,21 @@ func buildUIState(hostCallbackID string) uiStatePayload {
 		return available[i].ID < available[j].ID
 	})
 
+	var quotaPct map[string]int
+	quotaMu.RLock()
+	if len(quotaByModel) > 0 {
+		quotaPct = make(map[string]int, len(quotaByModel))
+		for k, v := range quotaByModel {
+			quotaPct[k] = int(math.Round(v * 100))
+		}
+	}
+	quotaMu.RUnlock()
+
 	return uiStatePayload{
 		Config:         cfg,
 		Available:      available,
 		ClaudeCloaking: lastClaudeCloakingVal.Load(),
+		QuotaByModel:   quotaPct,
 	}
 }
 
@@ -243,6 +263,8 @@ func renderEditorHTML(initialState uiStatePayload) ([]byte, error) {
 	return []byte(htmlDoc), nil
 }
 
+var _ = fmt.Sprint
+
 const editorHTMLTemplate = `<!doctype html>
 <html lang="en">
 <head>
@@ -251,200 +273,467 @@ const editorHTMLTemplate = `<!doctype html>
 <title>Model List Tweaker</title>
 <style>
   :root {
-    --bg: #0f172a;
-    --panel: #1e293b;
-    --panel-alt: #0b1120;
-    --border: #334155;
-    --text: #f8fafc;
-    --muted: #94a3b8;
-    --accent: #38bdf8;
-    --accent-hover: #0284c7;
-    --danger: #ef4444;
-    --success: #22c55e;
+    --bg-secondary: #faf9f5;
+    --bg-primary: #f0eee8;
+    --bg-tertiary: #e9e6df;
+    --bg-hover: #e9e6df;
+    --bg-quinary: #f6f4ee;
+    --text-primary: #2d2a26;
+    --text-secondary: #6d6760;
+    --text-tertiary: #a29c95;
+    --text-quaternary: #c0bab3;
+    --border-color: #e3e1db;
+    --border-primary: #d5d2cb;
+    --border-hover: #cecac4;
+    --primary-color: #8b8680;
+    --primary-hover: #7f7a74;
+    --primary-active: #726d67;
+    --primary-contrast: #ffffff;
+    --success-color: #10b981;
+    --quota-medium-color: #e0aa14;
+    --warning-color: #c65746;
+    --error-color: #c65746;
+    --viz-success: #10b981;
+    --viz-failure: #c65746;
+    --success-badge-bg: #d1fae5;
+    --success-badge-text: #065f46;
+    --success-badge-border: #6ee7b7;
+    --failure-badge-bg: rgba(198, 87, 70, 0.14);
+    --failure-badge-text: #8a3a30;
+    --failure-badge-border: rgba(198, 87, 70, 0.35);
+    --count-badge-bg: rgba(139, 134, 128, 0.18);
+    --count-badge-text: #726d67;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-full: 9999px;
+    --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
   }
+
+  [data-theme='white'] {
+    --bg-secondary: #ffffff;
+    --bg-primary: #ffffff;
+    --bg-tertiary: #f6f6f6;
+    --bg-hover: #f6f6f6;
+    --bg-quinary: #ffffff;
+    --border-color: #e5e5e5;
+    --border-primary: #d9d9d9;
+    --border-hover: #cccccc;
+  }
+
+  [data-theme='dark'] {
+    --bg-secondary: #151412;
+    --bg-primary: #1d1b18;
+    --bg-tertiary: #262320;
+    --bg-hover: #2e2a26;
+    --bg-quinary: #191714;
+    --text-primary: #f6f4f1;
+    --text-secondary: #c9c3bb;
+    --text-tertiary: #9c958d;
+    --text-quaternary: #6f6962;
+    --border-color: #3a3530;
+    --border-primary: #4a453f;
+    --border-hover: #5a544d;
+    --primary-color: #8b8680;
+    --primary-hover: #9a948e;
+    --primary-active: #a6a099;
+    --primary-contrast: #ffffff;
+    --quota-medium-color: #ffd862;
+    --viz-success: #0fae78;
+    --viz-failure: #cf4b3a;
+    --success-badge-bg: rgba(6, 78, 59, 0.3);
+    --success-badge-text: #6ee7b7;
+    --success-badge-border: #059669;
+    --failure-badge-bg: rgba(198, 87, 70, 0.24);
+    --failure-badge-text: #f1b0a6;
+    --failure-badge-border: rgba(198, 87, 70, 0.5);
+    --count-badge-bg: rgba(139, 134, 128, 0.28);
+    --count-badge-text: #a6a099;
+    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.3);
+  }
+
   * { box-sizing: border-box; }
-  body {
+  html, body {
     margin: 0;
-    padding: 24px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.45;
+    padding: 0;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
-  .container { max-width: 100%; margin: 0 auto; }
-  header {
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+  ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+  .main-content {
+    padding: 70px clamp(20px, 3vw, 48px) 40px;
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 100%;
+  }
+
+  .page-header {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .page-title {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+  .page-desc {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+
+  .status-bar {
+    display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+    background: var(--bg-primary);
+    flex-wrap: wrap;
   }
-  h1 { margin: 0; font-size: 1.5rem; }
-  .subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
-  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-  button {
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 14px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
+  .status-pills {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: var(--radius-full);
+    border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    font-weight: 600;
     white-space: nowrap;
   }
-  button:hover { border-color: var(--accent); }
-  button.primary {
-    background: var(--accent);
-    color: #0f172a;
-    border-color: var(--accent);
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--success-color);
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+  }
+  .status-label { color: var(--text-secondary); }
+  .status-value { color: var(--text-primary); font-weight: 700; }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 8px 14px;
+    font-size: 13px;
     font-weight: 600;
+    cursor: pointer;
+    transition: all 150ms ease;
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    white-space: nowrap;
   }
-  button.primary:hover { background: var(--accent-hover); color: #fff; }
-  button.sm { padding: 4px 8px; font-size: 0.78rem; }
-  input[type="text"], input[type="password"], textarea {
-    background: var(--panel-alt);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 5px 8px;
-    font-size: 0.83rem;
+  .btn:hover {
+    background-color: var(--bg-hover);
+    border-color: var(--border-hover);
+  }
+  .btn-primary {
+    background-color: var(--primary-color);
+    color: var(--primary-contrast);
+    border-color: var(--primary-color);
+  }
+  .btn-primary:hover {
+    background-color: var(--primary-hover);
+    border-color: var(--primary-hover);
+  }
+  .btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+
+  .input, textarea {
     width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 6px 10px;
+    font-size: 13px;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    transition: border-color 150ms ease, box-shadow 150ms ease;
   }
-  input[type="text"]:focus, input[type="password"]:focus, textarea:focus {
+  .input:focus, textarea:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(139, 134, 128, 0.18);
   }
+
+  .notice {
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    display: none;
+  }
+  .notice.ok {
+    display: block;
+    background: var(--success-badge-bg);
+    color: var(--success-badge-text);
+    border: 1px solid var(--success-badge-border);
+  }
+  .notice.err {
+    display: block;
+    background: var(--failure-badge-bg);
+    color: var(--failure-badge-text);
+    border: 1px solid var(--failure-badge-border);
+  }
+
   .grid {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
     gap: 20px;
     align-items: start;
   }
-  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  @media (max-width: 1024px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
   .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
     padding: 16px;
-    margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
   }
-  .card h2 {
-    margin: 0 0 12px 0;
-    font-size: 1.05rem;
+  .card-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
     gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   }
+  .card-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
   table {
     width: auto;
     border-collapse: collapse;
-    font-size: 0.83rem;
+    font-size: 13px;
   }
   th, td {
     text-align: left;
-    padding: 5px 8px;
-    border-bottom: 1px solid var(--border);
+    padding: 6px 8px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 65%, transparent);
     vertical-align: middle;
     white-space: nowrap;
   }
-  th { color: var(--muted); font-weight: 600; font-size: 0.76rem; text-transform: uppercase; }
-  tr.dragging { opacity: 0.45; }
-  tr.hidden-row { opacity: 0.5; }
+  th {
+    color: var(--text-tertiary);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  tbody tr {
+    transition: background-color 120ms ease, opacity 120ms ease;
+  }
+  tbody tr:hover {
+    background-color: color-mix(in srgb, var(--bg-tertiary) 65%, transparent);
+  }
+  tr.dragging { opacity: 0.4; }
+  tr.hidden-row { opacity: 0.48; }
+
   .drag-handle {
     cursor: grab;
-    color: var(--muted);
+    color: var(--text-tertiary);
     user-select: none;
-    font-size: 1rem;
-    padding-right: 4px;
+    font-size: 14px;
+    padding-right: 6px;
+    display: inline-block;
+  }
+  .drag-handle:hover { color: var(--text-primary); }
+  .row-index {
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
   }
   .display-input {
-    width: 210px !important;
+    width: 205px !important;
   }
-  .badge {
-    display: inline-block;
-    padding: 2px 6px;
-    font-size: 0.72rem;
-    border-radius: 4px;
-    background: var(--panel-alt);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    margin-left: 6px;
-    white-space: nowrap;
+
+  /* CPA ToggleSwitch */
+  .switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    vertical-align: middle;
   }
-  .badge.builtin {
-    border-color: #475569;
-    color: #cbd5e1;
+  .switch input {
+    width: 0;
+    height: 0;
+    opacity: 0;
+    position: absolute;
   }
-  .status-bar {
-    padding: 10px 14px;
-    border-radius: 6px;
-    margin-bottom: 16px;
-    font-size: 0.875rem;
-    display: none;
+  .switch-track {
+    width: 36px;
+    height: 20px;
+    background: var(--border-primary);
+    border-radius: var(--radius-full);
+    position: relative;
+    transition: background-color 180ms var(--ease-out-strong);
   }
-  .status-bar.ok { display: block; background: rgba(34,197,94,0.15); border: 1px solid var(--success); color: #86efac; }
-  .status-bar.err { display: block; background: rgba(239,68,68,0.15); border: 1px solid var(--danger); color: #fca5a5; }
+  .switch-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: #ffffff;
+    border-radius: var(--radius-full);
+    box-shadow: var(--shadow-sm);
+    transition: transform 180ms var(--ease-out-strong);
+  }
+  .switch input:checked + .switch-track {
+    background: var(--warning-color);
+  }
+  .switch input:checked + .switch-track .switch-thumb {
+    transform: translateX(16px);
+  }
+
   .preview-list {
-    list-style: decimal;
-    padding-left: 28px;
+    list-style: none;
+    padding: 0;
     margin: 0;
-    font-size: 0.84rem;
+    font-size: 13px;
     overflow-x: auto;
   }
   .preview-list li {
-    padding: 5px 4px;
-    border-bottom: 1px solid rgba(51,65,85,0.5);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 55%, transparent);
     white-space: nowrap;
   }
+  .preview-list li:last-child { border-bottom: 0; }
+  .preview-num {
+    width: 24px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
   .preview-list li.builtin-item {
-    color: #94a3b8;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
   }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
-  .muted { color: var(--muted); }
-  .top-controls {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 10px;
-  }
-  .th-hide-label {
+
+  .badge {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    cursor: pointer;
-    user-select: none;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: var(--radius-full);
+    background: var(--count-badge-bg);
+    color: var(--text-secondary);
+    white-space: nowrap;
   }
+  .badge.builtin {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-tertiary);
+  }
+  .badge.quota-high {
+    background: var(--success-badge-bg);
+    color: var(--success-badge-text);
+  }
+  .badge.quota-low {
+    background: var(--failure-badge-bg);
+    color: var(--failure-badge-text);
+  }
+
+  .mono {
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  .muted { color: var(--text-secondary); }
+  .subtle { color: var(--text-tertiary); }
 </style>
 </head>
 <body>
-<div class="container">
-  <header>
-    <div>
-      <h1>Model List Tweaker</h1>
-      <div class="subtitle">Drag to reorder, edit Display Name, and toggle Hide for the global model catalog.</div>
-    </div>
-    <div class="toolbar">
-      <input type="password" id="mgmtKey" placeholder="Management Key (auto-detected if logged in)" style="width: 250px;">
-      <button onclick="refreshFromServer()">Refresh</button>
-      <button class="primary" onclick="saveConfig()">Save Configuration</button>
-    </div>
+<main class="main-content">
+  <header class="page-header">
+    <h1 class="page-title">Model List Tweaker</h1>
+    <p class="page-desc">Drag rows to reorder, customize display names, and toggle visibility across the global model catalog.</p>
   </header>
 
-  <div id="statusBar" class="status-bar"></div>
+  <div class="status-bar">
+    <div class="status-pills">
+      <span class="status-pill">
+        <span class="status-dot"></span>
+        <span class="status-label">Visible</span>
+        <span class="status-value" id="visibleCount">0</span>
+      </span>
+      <span class="status-pill">
+        <span class="status-label">Hidden</span>
+        <span class="status-value" id="hiddenCount">0</span>
+      </span>
+      <span class="status-pill">
+        <span class="status-label">Total</span>
+        <span class="status-value" id="totalCount">0</span>
+      </span>
+    </div>
+    <div class="toolbar">
+      <input type="password" id="mgmtKey" class="input" placeholder="Management Key" style="width: 190px; display: none;">
+      <button class="btn" onclick="refreshFromServer()">Refresh</button>
+      <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+    </div>
+  </div>
+
+  <div id="statusBar" class="notice"></div>
 
   <div class="grid">
-    <div class="card">
-      <h2>
-        <span>Model List</span>
-        <button class="sm" id="toggleAllBtn" onclick="toggleHideAll()">Hide All</button>
-      </h2>
-      <div class="top-controls">
-        <input type="text" id="filterInput" placeholder="Filter models..." oninput="renderRulesTable()">
+    <section class="card">
+      <div class="card-header">
+        <h2 class="card-title">Model Catalog</h2>
+        <button class="btn btn-sm" id="toggleAllBtn" onclick="toggleHideAll()">Hide All</button>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <input type="text" id="filterInput" class="input" placeholder="Search model ID or display name..." oninput="renderRulesTable()">
       </div>
       <table>
         <thead>
@@ -452,49 +741,103 @@ const editorHTMLTemplate = `<!doctype html>
             <th>#</th>
             <th>Model ID</th>
             <th>Display Name</th>
-            <th style="text-align:center;">
-              <label class="th-hide-label" title="Hide / Unhide all visible models">
-                <input type="checkbox" id="toggleAllCheckbox" onchange="toggleHideAll(this.checked)">
-                Hide
-              </label>
-            </th>
+            <th style="text-align:center;">Hide</th>
           </tr>
         </thead>
         <tbody id="rulesBody"></tbody>
       </table>
-    </div>
+    </section>
 
-    <div class="card">
-      <h2><span>Final Order Preview (Claude <code>/model</code>)</span></h2>
+    <section class="card">
+      <div class="card-header">
+        <h2 class="card-title">Final Order Preview (Claude <code>/model</code>)</h2>
+        <span class="badge" id="cloakBadge">Cloaked</span>
+      </div>
       <ol id="previewList" class="preview-list"></ol>
-    </div>
+    </section>
   </div>
 
-  <div class="card">
-    <h2>
-      <span>YAML Snippet (<code>config.yaml</code>)</span>
-      <button class="sm" onclick="copyYAML()">Copy YAML</button>
-    </h2>
-    <textarea id="yamlPreview" rows="14" class="mono" readonly></textarea>
-  </div>
-</div>
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Configuration YAML (<code>config.yaml</code>)</h2>
+      <button class="btn btn-sm" onclick="copyYAML()">Copy YAML</button>
+    </div>
+    <textarea id="yamlPreview" rows="12" class="mono" readonly></textarea>
+  </section>
+</main>
 
 <script>
 let state = __INITIAL_STATE_JSON__;
 let dragIndex = null;
 
+function syncThemeWithCPA() {
+  const apply = (mode) => {
+    if (mode === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else if (mode === 'white') {
+      document.documentElement.setAttribute('data-theme', 'white');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  };
+  try {
+    if (window.parent && window.parent !== window && window.parent.document) {
+      const parentDoc = window.parent.document.documentElement;
+      const syncFromParent = () => apply(parentDoc.getAttribute('data-theme'));
+      syncFromParent();
+      new MutationObserver(syncFromParent).observe(parentDoc, { attributes: true, attributeFilter: ['data-theme'] });
+      return;
+    }
+  } catch (_) {}
+  try {
+    const raw = localStorage.getItem('cli-proxy-theme');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const t = parsed?.state?.theme;
+      if (t === 'dark' || t === 'white' || t === 'light') {
+        apply(t);
+        return;
+      }
+    }
+  } catch (_) {}
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    apply('dark');
+  }
+}
+
+function deobfuscateCPASecret(payload) {
+  const prefix = 'enc::v1::';
+  if (!payload || !payload.startsWith(prefix)) return payload;
+  try {
+    const bin = atob(payload.slice(prefix.length));
+    const data = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+    const keyStr = 'cli-proxy-api-webui::secure-storage|' + window.location.host + '|' + navigator.userAgent;
+    const keyBytes = new TextEncoder().encode(keyStr);
+    const out = new Uint8Array(data.length);
+    for (let i = 0; i < data.length; i++) out[i] = data[i] ^ keyBytes[i % keyBytes.length];
+    return new TextDecoder().decode(out);
+  } catch (_) {
+    return payload;
+  }
+}
+
 function detectStoredManagementKey() {
   try {
-    const candidates = ['management_key', 'secret_key', 'cpa_management_key', 'cliproxy_management_key', 'apiKey', 'token', 'auth_token'];
-    for (const k of candidates) {
-      const v = localStorage.getItem(k) || sessionStorage.getItem(k);
-      if (v && typeof v === 'string' && v.trim()) return v.trim().replace(/^"|"$/g, '');
+    const authRaw = localStorage.getItem('cli-proxy-auth');
+    if (authRaw) {
+      const parsed = JSON.parse(authRaw);
+      const k = parsed?.state?.managementKey;
+      if (k && typeof k === 'string' && k.trim()) return k.trim();
     }
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && /secret|mgmt|management|key|token/i.test(k)) {
-        const v = localStorage.getItem(k);
-        if (v && v.length < 256 && !v.startsWith('{')) return v.trim().replace(/^"|"$/g, '');
+    const legacy = localStorage.getItem('managementKey');
+    if (legacy) {
+      const dec = deobfuscateCPASecret(legacy);
+      try {
+        const parsed = JSON.parse(dec);
+        if (typeof parsed === 'string' && parsed.trim()) return parsed.trim();
+      } catch (_) {
+        if (typeof dec === 'string' && dec.trim()) return dec.trim();
       }
     }
   } catch (_) {}
@@ -502,6 +845,7 @@ function detectStoredManagementKey() {
 }
 
 function initUI() {
+  syncThemeWithCPA();
   if (!state.config) state.config = { enabled: true, priority: 100, models: [] };
   if (!Array.isArray(state.config.models)) state.config.models = [];
   if (!Array.isArray(state.available)) state.available = [];
@@ -518,18 +862,31 @@ function initUI() {
     }
   }
 
+  const keyInput = document.getElementById('mgmtKey');
   const detectedKey = detectStoredManagementKey();
-  if (detectedKey && !document.getElementById('mgmtKey').value) {
-    document.getElementById('mgmtKey').value = detectedKey;
+  if (detectedKey) {
+    keyInput.value = detectedKey;
+    keyInput.style.display = 'none';
+  } else if (!keyInput.value) {
+    keyInput.style.display = 'inline-block';
   }
 
   renderAll();
 }
 
 function renderAll() {
+  renderCounts();
   renderRulesTable();
   renderPreview();
   renderYAML();
+}
+
+function renderCounts() {
+  const total = state.config.models.length;
+  const hidden = state.config.models.filter(r => !!r.hidden).length;
+  document.getElementById('totalCount').textContent = String(total);
+  document.getElementById('hiddenCount').textContent = String(hidden);
+  document.getElementById('visibleCount').textContent = String(total - hidden);
 }
 
 function defaultDisplayNameFor(id) {
@@ -550,13 +907,7 @@ function visibleRules() {
 function updateToggleAllControl() {
   const vis = visibleRules();
   const allHidden = vis.length > 0 && vis.every(r => !!r.hidden);
-  const someHidden = vis.some(r => !!r.hidden);
-  const cb = document.getElementById('toggleAllCheckbox');
   const btn = document.getElementById('toggleAllBtn');
-  if (cb) {
-    cb.checked = allHidden;
-    cb.indeterminate = !allHidden && someHidden;
-  }
   if (btn) {
     btn.textContent = allHidden ? 'Unhide All' : 'Hide All';
   }
@@ -599,10 +950,15 @@ function renderRulesTable() {
     };
 
     tr.innerHTML =
-      '<td><span class="drag-handle" title="Drag to reorder">☰</span>' + (idx + 1) + '</td>' +
+      '<td><span class="drag-handle" title="Drag to reorder">⋮⋮</span><span class="row-index">' + (idx + 1) + '</span></td>' +
       '<td class="mono">' + escHTML(rule.id || '') + '</td>' +
-      '<td><input type="text" class="display-input" value="' + escAttr(rule.display_name || '') + '" placeholder="' + escAttr(defName || '') + '" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
-      '<td style="text-align:center;"><input type="checkbox" ' + (rule.hidden ? 'checked' : '') + ' onchange="updateRule(' + idx + ', \'hidden\', this.checked); renderAll();"></td>';
+      '<td><input type="text" class="input display-input" value="' + escAttr(rule.display_name || '') + '" placeholder="' + escAttr(defName || '') + '" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
+      '<td style="text-align:center;">' +
+        '<label class="switch" title="Hide this model">' +
+          '<input type="checkbox" ' + (rule.hidden ? 'checked' : '') + ' onchange="updateRule(' + idx + ', \'hidden\', this.checked); renderAll();">' +
+          '<span class="switch-track"><span class="switch-thumb"></span></span>' +
+        '</label>' +
+      '</td>';
     tbody.appendChild(tr);
   });
   updateToggleAllControl();
@@ -611,6 +967,7 @@ function renderRulesTable() {
 function updateRule(idx, field, val) {
   if (!state.config.models[idx]) return;
   state.config.models[idx][field] = typeof val === 'string' ? val.trim() : val;
+  renderCounts();
   renderPreview();
   renderYAML();
 }
@@ -623,6 +980,10 @@ function cloakClaudeID(id) {
 function renderPreview() {
   const list = document.getElementById('previewList');
   const cloak = state.claude_cloaking !== false;
+  const cloakBadge = document.getElementById('cloakBadge');
+  if (cloakBadge) {
+    cloakBadge.textContent = cloak ? 'Cloaking Active' : 'Uncloaked';
+  }
   list.innerHTML = '';
 
   const topBuiltins = [
@@ -637,13 +998,19 @@ function renderPreview() {
 
   const topGateway = [];
   const bottomGateway = [];
+  const quotaMap = state.quota_by_model || {};
+  const quotaEnabled = !!(state.config.quota && state.config.quota.enabled);
 
   for (const r of state.config.models) {
     const id = (r.id || '').trim();
     if (!id || r.hidden) continue;
     const defName = defaultDisplayNameFor(id);
     const effectiveID = cloak ? cloakClaudeID(id) : id;
-    const effectiveName = (r.display_name || '').trim() || defName;
+    let effectiveName = (r.display_name || '').trim() || defName;
+    const pct = quotaEnabled && typeof quotaMap[id] === 'number' ? quotaMap[id] : null;
+    if (pct !== null && !/\(\d+%\)$/.test(effectiveName)) {
+      effectiveName = effectiveName + ' (' + pct + '%)';
+    }
 
     if (!cloak && !/(claude|anthropic)/i.test(effectiveID)) {
       continue;
@@ -652,7 +1019,7 @@ function renderPreview() {
     const entry = {
       label: effectiveName,
       id: id,
-      desc: 'From gateway',
+      pct: pct,
       builtin: false
     };
     if (effectiveID.toLowerCase().startsWith('claude-fable-5')) {
@@ -663,16 +1030,22 @@ function renderPreview() {
   }
 
   const finalRows = [...topBuiltins, ...topGateway, ...bottomBuiltins, ...bottomGateway];
-  for (const item of finalRows) {
+  finalRows.forEach((item, index) => {
     const li = document.createElement('li');
+    const numSpan = '<span class="preview-num">' + (index + 1) + '.</span>';
     if (item.builtin) {
       li.className = 'builtin-item';
-      li.innerHTML = '<strong>' + escHTML(item.label) + '</strong> <span class="badge builtin">Claude built-in</span> <span class="muted" style="font-size:0.78rem;margin-left:6px;">' + escHTML(item.desc) + '</span>';
+      li.innerHTML = numSpan + '<strong>' + escHTML(item.label) + '</strong> <span class="badge builtin">Built-in</span> <span class="subtle" style="font-size:12px;">' + escHTML(item.desc) + '</span>';
     } else {
-      li.innerHTML = '<strong>' + escHTML(item.label) + '</strong> <span class="mono muted">(' + escHTML(item.id) + ')</span> <span class="badge">From gateway</span>';
+      let qBadge = '';
+      if (item.pct !== null && item.pct !== undefined) {
+        const cls = item.pct >= 70 ? 'quota-high' : (item.pct < 30 ? 'quota-low' : '');
+        qBadge = ' <span class="badge ' + cls + '">' + item.pct + '%</span>';
+      }
+      li.innerHTML = numSpan + '<strong>' + escHTML(item.label) + '</strong> <span class="mono subtle">' + escHTML(item.id) + '</span>' + qBadge;
     }
     list.appendChild(li);
-  }
+  });
 }
 
 function buildConfigObject() {
@@ -684,12 +1057,15 @@ function buildConfigObject() {
       if (r.hidden) out.hidden = true;
       return out;
     });
-  return {
+  const out = {
     enabled: true,
     priority: state.config.priority || 100,
-    models: models,
-    quota: state.config.quota
+    models: models
   };
+  if (state.config.quota && state.config.quota.enabled) {
+    out.quota = state.config.quota;
+  }
+  return out;
 }
 
 function renderYAML() {
@@ -708,12 +1084,12 @@ function renderYAML() {
     if (m.display_name) lines.push('          display_name: ' + JSON.stringify(m.display_name));
     if (m.hidden) lines.push('          hidden: true');
   }
-  if (cfg.quota.enabled) {
+  if (state.config.quota && state.config.quota.enabled) {
     lines.push('      quota:');
     lines.push('        enabled: true');
-    lines.push('        management_url: ' + JSON.stringify(cfg.quota.management_url));
-    lines.push('        management_key: ' + JSON.stringify(cfg.quota.management_key));
-    lines.push('        refresh_minutes: ' + cfg.quota.refresh_minutes);
+    lines.push('        management_url: ' + JSON.stringify(state.config.quota.management_url));
+    lines.push('        management_key: ' + JSON.stringify(state.config.quota.management_key));
+    lines.push('        refresh_minutes: ' + state.config.quota.refresh_minutes);
   }
   document.getElementById('yamlPreview').value = lines.join('\n');
 }
@@ -739,7 +1115,7 @@ async function refreshFromServer() {
 
 async function saveConfig() {
   const cfg = buildConfigObject();
-  const key = document.getElementById('mgmtKey').value.trim();
+  const key = (document.getElementById('mgmtKey').value || detectStoredManagementKey() || '').trim();
   const headers = { 'Content-Type': 'application/json' };
   if (key) {
     headers['Authorization'] = 'Bearer ' + key;
@@ -765,7 +1141,8 @@ async function saveConfig() {
     if (persisted) {
       showStatus('Saved to config.yaml and applied immediately.', true);
     } else {
-      showStatus('Applied to active runtime! Enter your Management Key at the top right to also persist to config.yaml on disk.', true);
+      document.getElementById('mgmtKey').style.display = 'inline-block';
+      showStatus('Applied to active runtime! Enter Management Key to also persist to config.yaml.', true);
     }
   } catch (err) {
     showStatus('Save error: ' + err.message, false);
@@ -774,7 +1151,7 @@ async function saveConfig() {
 
 function showStatus(msg, ok) {
   const bar = document.getElementById('statusBar');
-  bar.className = 'status-bar ' + (ok ? 'ok' : 'err');
+  bar.className = 'notice ' + (ok ? 'ok' : 'err');
   bar.textContent = msg;
 }
 
