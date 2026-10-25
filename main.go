@@ -66,7 +66,8 @@ const (
 	schemaVersion uint32 = 6
 
 	pluginID      = "model-list-tweaker"
-	pluginVersion = "0.3.1"
+	pluginName    = "Model List Tweaker"
+	pluginVersion = "0.3.2"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin"
 	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin/main/assets/logo.png"

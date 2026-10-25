@@ -237,7 +237,7 @@ func pluginRegistration() registration {
 	return registration{
 		SchemaVersion: schemaVersion,
 		Metadata: pluginMetadata{
-			Name:             pluginID,
+			Name:             pluginName,
 			Version:          pluginVersion,
 			Author:           pluginAuthor,
 			GitHubRepository: pluginRepo,
