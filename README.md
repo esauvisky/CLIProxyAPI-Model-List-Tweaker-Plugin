@@ -1,6 +1,10 @@
 # Reorder/Rename Models
 
-This ABI v1 plugin lets you **reorder**, **rename** (`display_name`), and **hide** models in the global model catalog across Claude Code (`/model`), OpenAI (`/v1/models`), Codex (`/v1/models?client_version=...`), Gemini (`/v1beta/models`), and Grok clients — with a built-in drag-and-drop web editor in the CLIProxyAPI Management UI.
+This ABI v1 plugin lets you **reorder**, **rename** (`display_name`), and **hide** models in the global model catalog across Claude Code (`/model`), Claude, OpenAI (`/v1/models`), Codex (`/v1/models?client_version=...`), Gemini (`/v1beta/models`), and Grok clients — with a built-in drag-and-drop web editor in the CLIProxyAPI Management UI.
+
+> **Companion Plugin:** Made to work alongside **[Safeguard Killer (`safeguard-killer`)](https://github.com/esauvisky/CLIProxyAPI-Safeguard-Killer-Plugin)** so you can pin refusal-evasion Smart Groups (`★ General Purpose`, `★ Heavy Thinkers`, `★ Uncensored Best`, etc.) to the top of `/model` and hide individual fallback-only models.
+>
+> **Important:** You must set `management_key` in the plugin's configuration (`plugins.configs.model-list-tweaker.management_key`) so the plugin can discover provider models and save changes from the editor UI.
 
 ## Build
 

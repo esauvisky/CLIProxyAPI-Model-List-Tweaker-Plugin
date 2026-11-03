@@ -662,7 +662,7 @@ const editorHTMLTemplate = `<!doctype html>
 <main class="page">
   <header class="page-header">
     <h1 class="page-title">Reorder/Rename Models</h1>
-    <p class="page-desc">Rename, reorder, and hide models across the global model catalog.</p>
+    <p class="page-desc">Rename, reorder, and hide models across the global model catalog. Requires <span class="mono">management_key</span> in the plugin config. Made to work alongside <a href="https://github.com/esauvisky/CLIProxyAPI-Safeguard-Killer-Plugin" target="_blank" rel="noopener" style="color:var(--text-primary);">Safeguard Killer</a>.</p>
   </header>
 
   <div class="status-bar">

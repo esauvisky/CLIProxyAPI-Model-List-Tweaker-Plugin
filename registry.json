@@ -4,9 +4,9 @@
     {
       "id": "model-list-tweaker",
       "name": "Reorder/Rename Models",
-      "description": "Reorder, rename display names, and hide models in the global model catalog across Claude Code, OpenAI, Codex, Gemini, and Grok clients, with a built-in web editor.",
+      "description": "Reorder, rename display names, and hide models in the global model catalog across Claude Code, Claude, OpenAI, Codex, Gemini, and Grok clients, with a built-in web editor. Set management_key in the plugin config. Made to work alongside Safeguard Killer (https://github.com/esauvisky/CLIProxyAPI-Safeguard-Killer-Plugin).",
       "author": "esauvisky",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "repository": "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin",
       "homepage": "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin",
       "logo": "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin/main/assets/logo.png",
