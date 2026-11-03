@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
 	}
 	require_contains(&plugin, "plugin.register", NULL, "response_interceptor");
 	require_contains(&plugin, "plugin.register", NULL, "management_api");
-	require_contains(&plugin, "management.register", NULL, "Model Renamer/Reorderer");
+	require_contains(&plugin, "management.register", NULL, "Reorder/Rename Models");
 	plugin.shutdown();
 	return 0;
 }

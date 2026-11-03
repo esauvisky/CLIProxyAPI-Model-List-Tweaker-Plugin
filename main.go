@@ -66,8 +66,8 @@ const (
 	schemaVersion uint32 = 6
 
 	pluginID      = "model-list-tweaker"
-	pluginName    = "Model Renamer/Reorderer"
-	pluginVersion = "0.4.0"
+	pluginName    = "Reorder/Rename Models"
+	pluginVersion = "0.5.0"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin"
 	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin/main/assets/logo.png"

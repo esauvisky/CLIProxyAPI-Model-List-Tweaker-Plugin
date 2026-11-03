@@ -3,10 +3,10 @@
   "plugins": [
     {
       "id": "model-list-tweaker",
-      "name": "Model Renamer/Reorderer",
+      "name": "Reorder/Rename Models",
       "description": "Reorder, rename display names, and hide models in the global model catalog across Claude Code, OpenAI, Codex, Gemini, and Grok clients, with a built-in web editor.",
       "author": "esauvisky",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "repository": "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin",
       "homepage": "https://github.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin",
       "logo": "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-Model-List-Tweaker-Plugin/main/assets/logo.png",

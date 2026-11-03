@@ -64,18 +64,18 @@ func managementRegistrationPayload() managementRegistration {
 			{
 				Method:      http.MethodGet,
 				Path:        mgmtStateRoutePath,
-				Description: "Returns discovered models and active Model Renamer/Reorderer config.",
+				Description: "Returns discovered models and active Reorder/Rename Models config.",
 			},
 			{
 				Method:      http.MethodPost,
 				Path:        mgmtStateRoutePath,
-				Description: "Updates active in-memory Model Renamer/Reorderer config.",
+				Description: "Updates active in-memory Reorder/Rename Models config.",
 			},
 		},
 		Resources: []managementResource{
 			{
 				Path:        uiResourcePath,
-				Menu:        "Model Renamer/Reorderer",
+				Menu:        "Reorder/Rename Models",
 				Description: "Reorder, rename, and hide models in the global model list.",
 			},
 		},
@@ -221,7 +221,7 @@ const editorHTMLTemplate = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Model Renamer/Reorderer</title>
+<title>Reorder/Rename Models</title>
 <style>
   /* CPA Dark Theme (Default) */
   :root, [data-theme='dark'] {
@@ -673,7 +673,7 @@ const editorHTMLTemplate = `<!doctype html>
 <body>
 <main class="page">
   <header class="page-header">
-    <h1 class="page-title">Model Renamer/Reorderer</h1>
+    <h1 class="page-title">Reorder/Rename Models</h1>
     <p class="page-desc">Rename, reorder, and hide models across the global model catalog.</p>
   </header>
 
@@ -719,6 +719,7 @@ const editorHTMLTemplate = `<!doctype html>
         <thead>
           <tr>
             <th>#</th>
+            <th>Provider</th>
             <th>Model ID</th>
             <th>Display Name</th>
             <th style="text-align:center;">Hide</th>
@@ -894,12 +895,25 @@ function defaultDisplayNameFor(id) {
   return found && found.display_name ? found.display_name : id;
 }
 
+function providersFor(id) {
+  const found = state.available.find(a => a.id.toLowerCase() === (id || '').toLowerCase());
+  // Config rules can reference models no current credential serves, and models only seen in
+  // catalog responses without owned_by come back with providers: null. Both have no provider.
+  return found && found.providers ? found.providers : [];
+}
+
+function providerBadges(id) {
+  const providers = providersFor(id);
+  if (providers.length === 0) return '<span class="badge builtin" title="Not served by any current credential">not discovered</span>';
+  return providers.map(p => '<span class="badge">' + escHTML(p) + '</span>').join(' ');
+}
+
 function visibleRules() {
   const filter = (document.getElementById('filterInput').value || '').toLowerCase().trim();
   if (!filter) return state.config.models;
   return state.config.models.filter(rule => {
     const defName = defaultDisplayNameFor(rule.id);
-    const text = ((rule.id || '') + ' ' + (rule.display_name || '') + ' ' + defName).toLowerCase();
+    const text = ((rule.id || '') + ' ' + (rule.display_name || '') + ' ' + defName + ' ' + providersFor(rule.id).join(' ')).toLowerCase();
     return text.includes(filter);
   });
 }
@@ -931,7 +945,7 @@ function renderRulesTable() {
 
   state.config.models.forEach((rule, idx) => {
     const defName = defaultDisplayNameFor(rule.id);
-    const text = ((rule.id || '') + ' ' + (rule.display_name || '') + ' ' + defName).toLowerCase();
+    const text = ((rule.id || '') + ' ' + (rule.display_name || '') + ' ' + defName + ' ' + providersFor(rule.id).join(' ')).toLowerCase();
     if (filter && !text.includes(filter)) return;
 
     const tr = document.createElement('tr');
@@ -951,6 +965,7 @@ function renderRulesTable() {
 
     tr.innerHTML =
       '<td><span class="drag-handle" title="Drag to reorder">⋮⋮</span><span class="row-index">' + (idx + 1) + '</span></td>' +
+      '<td>' + providerBadges(rule.id) + '</td>' +
       '<td class="mono">' + escHTML(rule.id || '') + '</td>' +
       '<td><input type="text" class="input display-input" value="' + escAttr(rule.display_name || '') + '" placeholder="' + escAttr(defName || '') + '" oninput="updateRule(' + idx + ', \'display_name\', this.value)"></td>' +
       '<td style="text-align:center;">' +
@@ -1030,7 +1045,7 @@ function renderPreview() {
       li.className = 'builtin-item';
       li.innerHTML = numSpan + '<strong>' + escHTML(item.label) + '</strong> <span class="badge builtin">Built-in</span> <span class="subtle" style="font-size:12px;">' + escHTML(item.desc) + '</span>';
     } else {
-      li.innerHTML = numSpan + '<strong>' + escHTML(item.label) + '</strong> <span class="mono subtle">' + escHTML(item.id) + '</span>';
+      li.innerHTML = numSpan + providerBadges(item.id) + ' <strong>' + escHTML(item.label) + '</strong> <span class="mono subtle">' + escHTML(item.id) + '</span>';
     }
     list.appendChild(li);
   });
