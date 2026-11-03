@@ -410,18 +410,6 @@ const editorHTMLTemplate = `<!doctype html>
   .status-label { color: var(--text-secondary); }
   .status-value { color: var(--text-primary); font-weight: 700; }
 
-  /* Matches CPA PluginsPage .toolbar: left-aligned search + buttons, never in top-right */
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .toolbar .search-input {
-    flex: 1 1 260px;
-    max-width: 420px;
-  }
-
   .btn {
     display: inline-flex;
     align-items: center;
@@ -700,20 +688,17 @@ const editorHTMLTemplate = `<!doctype html>
     </div>
   </div>
 
-  <div class="toolbar">
-    <input type="search" id="filterInput" class="input search-input" placeholder="Search model ID or display name..." oninput="renderRulesTable()">
-    <input type="password" id="mgmtKey" class="input" placeholder="Management Key" style="width: 180px; display: none;">
-    <button class="btn" id="toggleAllBtn" onclick="toggleHideAll()">Hide All</button>
-    <button class="btn" onclick="refreshFromServer(false)">Refresh</button>
-    <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
-  </div>
-
   <div id="statusBar" class="notice"></div>
 
   <div class="grid">
     <section class="panel">
       <div class="panel-head">
         <h2 class="panel-title">Model Catalog</h2>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input type="search" id="filterInput" class="input" style="width: 220px;" placeholder="Search models..." oninput="renderRulesTable()">
+          <button class="btn btn-sm" id="toggleAllBtn" onclick="toggleHideAll()">Hide All</button>
+          <button class="btn btn-sm btn-primary" onclick="saveConfig()">Save Changes</button>
+        </div>
       </div>
       <table>
         <thead>
@@ -863,16 +848,8 @@ function hydrateState() {
 
 function initUI() {
   syncThemeWithCPA();
-  const keyInput = document.getElementById('mgmtKey');
-  const detectedKey = detectStoredManagementKey();
-  if (detectedKey) {
-    keyInput.value = detectedKey;
-    keyInput.style.display = 'none';
-  } else if (!keyInput.value) {
-    keyInput.style.display = 'inline-block';
-  }
   hydrateState();
-  void refreshFromServer(true);
+  void refreshFromServer();
 }
 
 function renderAll() {
@@ -1086,14 +1063,10 @@ function applyJSON() {
     showStatus('Invalid JSON: "models" must be an array.', false);
     return;
   }
-  if (typeof parsed.management_key !== 'string') {
-    showStatus('Invalid JSON: "management_key" must be a string (use "" if unset).', false);
-    return;
-  }
   state.config = {
-    enabled: parsed.enabled,
-    priority: parsed.priority,
-    management_key: parsed.management_key,
+    enabled: parsed.enabled !== false,
+    priority: parsed.priority || state.config.priority || 100,
+    management_key: typeof parsed.management_key === 'string' ? parsed.management_key : state.config.management_key,
     models: parsed.models.map(m => ({ id: m.id, display_name: m.display_name, hidden: m.hidden }))
   };
   hydrateState();
@@ -1108,8 +1081,7 @@ async function copyJSON() {
 }
 
 function authHeaders() {
-  const typedKey = document.getElementById('mgmtKey').value.trim();
-  const key = typedKey || state.config.management_key.trim();
+  const key = ((state.config && state.config.management_key) || detectStoredManagementKey() || '').trim();
   const headers = { 'Content-Type': 'application/json' };
   if (key) {
     headers['Authorization'] = 'Bearer ' + key;
@@ -1118,7 +1090,7 @@ function authHeaders() {
   return headers;
 }
 
-async function refreshFromServer(silent) {
+async function refreshFromServer() {
   try {
     const resp = await fetch(STATE_API_URL, {
       method: 'GET',
@@ -1126,15 +1098,13 @@ async function refreshFromServer(silent) {
       cache: 'no-store'
     });
     if (resp.status === 401 || resp.status === 403) {
-      document.getElementById('mgmtKey').style.display = 'inline-block';
-      throw new Error('Management key required (HTTP ' + resp.status + ')');
+      throw new Error('Set management_key in plugins.configs.model-list-tweaker in config.yaml (HTTP ' + resp.status + ')');
     }
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     state = await resp.json();
     hydrateState();
-    if (!silent) showStatus('Refreshed model catalog from server.', true);
     if (!state.config.management_key) {
-      showStatus('Models refreshed. Add management_key: "<your key>" under plugins.configs.model-list-tweaker in config.yaml so the editor can save and refresh models without typing the key.', false);
+      showStatus('Set management_key in plugins.configs.model-list-tweaker in config.yaml to save and refresh models.', false);
     }
   } catch (err) {
     showStatus('Failed to load state: ' + err.message, false);
@@ -1142,6 +1112,10 @@ async function refreshFromServer(silent) {
 }
 
 async function saveConfig() {
+  if (!state.config.management_key) {
+    showStatus('Set management_key in plugins.configs.model-list-tweaker in config.yaml before saving.', false);
+    return;
+  }
   const cfg = buildConfigObject();
   const headers = authHeaders();
 
@@ -1153,8 +1127,7 @@ async function saveConfig() {
       cache: 'no-store'
     });
     if (runtimeResp.status === 401 || runtimeResp.status === 403) {
-      document.getElementById('mgmtKey').style.display = 'inline-block';
-      throw new Error('Management key required (HTTP ' + runtimeResp.status + ')');
+      throw new Error('Invalid management_key in plugin config (HTTP ' + runtimeResp.status + ')');
     }
     if (!runtimeResp.ok) throw new Error('Runtime apply failed: HTTP ' + runtimeResp.status);
     state = await runtimeResp.json();
@@ -1175,8 +1148,7 @@ async function saveConfig() {
     if (persisted) {
       showStatus('Saved to config.yaml and applied immediately.', true);
     } else {
-      document.getElementById('mgmtKey').style.display = 'inline-block';
-      showStatus('Applied to active runtime! Enter Management Key to also persist to config.yaml.', true);
+      showStatus('Failed to persist to config.yaml. Check management_key in plugin config.', false);
     }
   } catch (err) {
     showStatus('Save error: ' + err.message, false);
