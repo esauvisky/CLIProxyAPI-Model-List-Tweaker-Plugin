@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -57,7 +56,6 @@ type uiStatePayload struct {
 	Config         pluginConfig      `json:"config"`
 	Available      []discoveredModel `json:"available"`
 	ClaudeCloaking bool              `json:"claude_cloaking"`
-	QuotaByModel   map[string]int    `json:"quota_by_model,omitempty"`
 }
 
 func managementRegistrationPayload() managementRegistration {
@@ -66,18 +64,18 @@ func managementRegistrationPayload() managementRegistration {
 			{
 				Method:      http.MethodGet,
 				Path:        mgmtStateRoutePath,
-				Description: "Returns discovered models and active Model List Tweaker config.",
+				Description: "Returns discovered models and active Model Renamer/Reorderer config.",
 			},
 			{
 				Method:      http.MethodPost,
 				Path:        mgmtStateRoutePath,
-				Description: "Updates active in-memory Model List Tweaker config.",
+				Description: "Updates active in-memory Model Renamer/Reorderer config.",
 			},
 		},
 		Resources: []managementResource{
 			{
 				Path:        uiResourcePath,
-				Menu:        "Model List Tweaker",
+				Menu:        "Model Renamer/Reorderer",
 				Description: "Reorder, rename, and hide models in the global model list.",
 			},
 		},
@@ -110,16 +108,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 					nextCfg.Priority = currentConfig().Priority
 				}
 				nextCfg = normalizeConfig(nextCfg)
-				if errQuota := validateQuotaConfig(nextCfg.Quota); errQuota != nil {
-					return okEnvelope(jsonManagementResponse(http.StatusBadRequest, map[string]any{
-						"error":   "invalid_config",
-						"message": errQuota.Error(),
-					}))
-				}
 				setPluginConfig(nextCfg)
-				if nextCfg.Quota.Enabled {
-					maybeRefreshQuota(nextCfg.Quota)
-				}
 			}
 			return okEnvelope(jsonManagementResponse(http.StatusOK, buildUIState(req.HostCallbackID)))
 		}
@@ -139,9 +128,6 @@ func handleManagement(raw []byte) ([]byte, error) {
 
 func buildUIState(hostCallbackID string) uiStatePayload {
 	cfg := currentConfig()
-	if cfg.Quota.Enabled {
-		maybeRefreshQuota(cfg.Quota)
-	}
 	byID := make(map[string]*discoveredModel)
 
 	if credentials, errFetch := hostModelsResolver(hostCallbackID); errFetch == nil {
@@ -200,21 +186,10 @@ func buildUIState(hostCallbackID string) uiStatePayload {
 		return available[i].ID < available[j].ID
 	})
 
-	var quotaPct map[string]int
-	quotaMu.RLock()
-	if len(quotaByModel) > 0 {
-		quotaPct = make(map[string]int, len(quotaByModel))
-		for k, v := range quotaByModel {
-			quotaPct[k] = int(math.Round(v * 100))
-		}
-	}
-	quotaMu.RUnlock()
-
 	return uiStatePayload{
 		Config:         cfg,
 		Available:      available,
 		ClaudeCloaking: lastClaudeCloakingVal.Load(),
-		QuotaByModel:   quotaPct,
 	}
 }
 
@@ -246,7 +221,7 @@ const editorHTMLTemplate = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Model List Tweaker</title>
+<title>Model Renamer/Reorderer</title>
 <style>
   /* CPA Dark Theme (Default) */
   :root, [data-theme='dark'] {
@@ -267,7 +242,6 @@ const editorHTMLTemplate = `<!doctype html>
     --primary-active: #a6a099;
     --primary-contrast: #ffffff;
     --success-color: #10b981;
-    --quota-medium-color: #ffd862;
     --warning-color: #c65746;
     --error-color: #c65746;
     --viz-success: #0fae78;
@@ -306,7 +280,6 @@ const editorHTMLTemplate = `<!doctype html>
     --primary-hover: #7f7a74;
     --primary-active: #726d67;
     --primary-contrast: #ffffff;
-    --quota-medium-color: #e0aa14;
     --viz-success: #10b981;
     --viz-failure: #c65746;
     --success-badge-bg: #d1fae5;
@@ -338,7 +311,6 @@ const editorHTMLTemplate = `<!doctype html>
     --primary-hover: #7f7a74;
     --primary-active: #726d67;
     --primary-contrast: #ffffff;
-    --quota-medium-color: #e0aa14;
     --viz-success: #10b981;
     --viz-failure: #c65746;
     --success-badge-bg: #d1fae5;
@@ -690,16 +662,6 @@ const editorHTMLTemplate = `<!doctype html>
   .badge.builtin {
     color: var(--text-tertiary);
   }
-  .badge.quota-high {
-    background: rgba(16, 185, 129, 0.12);
-    border-color: rgba(16, 185, 129, 0.25);
-    color: var(--success-color);
-  }
-  .badge.quota-low {
-    background: rgba(198, 87, 70, 0.12);
-    border-color: rgba(198, 87, 70, 0.25);
-    color: var(--warning-color);
-  }
 
   .mono {
     font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
@@ -711,8 +673,8 @@ const editorHTMLTemplate = `<!doctype html>
 <body>
 <main class="page">
   <header class="page-header">
-    <h1 class="page-title">Model List Tweaker</h1>
-    <p class="page-desc">Drag rows to reorder, customize display names, and toggle visibility across the global model catalog.</p>
+    <h1 class="page-title">Model Renamer/Reorderer</h1>
+    <p class="page-desc">Rename, reorder, and hide models across the global model catalog.</p>
   </header>
 
   <div class="status-bar">
@@ -776,16 +738,19 @@ const editorHTMLTemplate = `<!doctype html>
 
   <section class="panel">
     <div class="panel-head">
-      <h2 class="panel-title">Configuration YAML (<code>config.yaml</code>)</h2>
-      <button class="btn btn-sm" onclick="copyYAML()">Copy YAML</button>
+      <h2 class="panel-title">Configuration JSON</h2>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-sm" onclick="applyJSON()">Apply JSON</button>
+        <button class="btn btn-sm" onclick="copyJSON()">Copy JSON</button>
+      </div>
     </div>
-    <textarea id="yamlPreview" rows="12" class="mono" readonly></textarea>
+    <textarea id="jsonPreview" rows="12" class="mono"></textarea>
   </section>
 </main>
 
 <script>
 const STATE_API_URL = '/v0/management/plugins/model-list-tweaker/state';
-let state = { config: { enabled: true, priority: 100, models: [] }, available: [], claude_cloaking: true, quota_by_model: {} };
+let state = { config: { enabled: true, priority: 100, models: [], management_key: '' }, available: [], claude_cloaking: true };
 let dragIndex = null;
 
 function syncThemeWithCPA() {
@@ -877,7 +842,7 @@ function detectStoredManagementKey() {
 }
 
 function hydrateState() {
-  if (!state.config) state.config = { enabled: true, priority: 100, models: [] };
+  if (!state.config) state.config = { enabled: true, priority: 100, models: [], management_key: '' };
   if (!Array.isArray(state.config.models)) state.config.models = [];
   if (!Array.isArray(state.available)) state.available = [];
 
@@ -913,7 +878,7 @@ function renderAll() {
   renderCounts();
   renderRulesTable();
   renderPreview();
-  renderYAML();
+  renderJSON();
 }
 
 function renderCounts() {
@@ -1004,7 +969,7 @@ function updateRule(idx, field, val) {
   state.config.models[idx][field] = typeof val === 'string' ? val.trim() : val;
   renderCounts();
   renderPreview();
-  renderYAML();
+  renderJSON();
 }
 
 function cloakClaudeID(id) {
@@ -1033,19 +998,13 @@ function renderPreview() {
 
   const topGateway = [];
   const bottomGateway = [];
-  const quotaMap = state.quota_by_model || {};
-  const quotaEnabled = !!(state.config.quota && state.config.quota.enabled);
 
   for (const r of state.config.models) {
     const id = (r.id || '').trim();
     if (!id || r.hidden) continue;
     const defName = defaultDisplayNameFor(id);
     const effectiveID = cloak ? cloakClaudeID(id) : id;
-    let effectiveName = (r.display_name || '').trim() || defName;
-    const pct = quotaEnabled && typeof quotaMap[id] === 'number' ? quotaMap[id] : null;
-    if (pct !== null && !/\(\d+%\)$/.test(effectiveName)) {
-      effectiveName = effectiveName + ' (' + pct + '%)';
-    }
+    const effectiveName = (r.display_name || '').trim() || defName;
 
     if (!cloak && !/(claude|anthropic)/i.test(effectiveID)) {
       continue;
@@ -1054,7 +1013,6 @@ function renderPreview() {
     const entry = {
       label: effectiveName,
       id: id,
-      pct: pct,
       builtin: false
     };
     if (effectiveID.toLowerCase().startsWith('claude-fable-5')) {
@@ -1072,12 +1030,7 @@ function renderPreview() {
       li.className = 'builtin-item';
       li.innerHTML = numSpan + '<strong>' + escHTML(item.label) + '</strong> <span class="badge builtin">Built-in</span> <span class="subtle" style="font-size:12px;">' + escHTML(item.desc) + '</span>';
     } else {
-      let qBadge = '';
-      if (item.pct !== null && item.pct !== undefined) {
-        const cls = item.pct >= 70 ? 'quota-high' : (item.pct < 30 ? 'quota-low' : '');
-        qBadge = ' <span class="badge ' + cls + '">' + item.pct + '%</span>';
-      }
-      li.innerHTML = numSpan + '<strong>' + escHTML(item.label) + '</strong> <span class="mono subtle">' + escHTML(item.id) + '</span>' + qBadge;
+      li.innerHTML = numSpan + '<strong>' + escHTML(item.label) + '</strong> <span class="mono subtle">' + escHTML(item.id) + '</span>';
     }
     list.appendChild(li);
   });
@@ -1092,52 +1045,56 @@ function buildConfigObject() {
       if (r.hidden) out.hidden = true;
       return out;
     });
-  const out = {
-    enabled: true,
+  return {
+    enabled: state.config.enabled,
     priority: state.config.priority || 100,
+    management_key: state.config.management_key,
     models: models
   };
-  if (state.config.quota && state.config.quota.enabled) {
-    out.quota = state.config.quota;
-  }
-  return out;
 }
 
-function renderYAML() {
-  const cfg = buildConfigObject();
-  const lines = [
-    'plugins:',
-    '  enabled: true',
-    '  configs:',
-    '    model-list-tweaker:',
-    '      enabled: true',
-    '      priority: ' + cfg.priority,
-    '      models:'
-  ];
-  for (const m of cfg.models) {
-    lines.push('        - id: ' + JSON.stringify(m.id));
-    if (m.display_name) lines.push('          display_name: ' + JSON.stringify(m.display_name));
-    if (m.hidden) lines.push('          hidden: true');
-  }
-  if (state.config.quota && state.config.quota.enabled) {
-    lines.push('      quota:');
-    lines.push('        enabled: true');
-    lines.push('        management_url: ' + JSON.stringify(state.config.quota.management_url));
-    lines.push('        management_key: ' + JSON.stringify(state.config.quota.management_key));
-    lines.push('        refresh_minutes: ' + state.config.quota.refresh_minutes);
-  }
-  document.getElementById('yamlPreview').value = lines.join('\n');
+function renderJSON() {
+  const el = document.getElementById('jsonPreview');
+  if (document.activeElement === el) return;
+  el.value = JSON.stringify(buildConfigObject(), null, 2);
 }
 
-async function copyYAML() {
-  const el = document.getElementById('yamlPreview');
+function applyJSON() {
+  let parsed;
+  try {
+    parsed = JSON.parse(document.getElementById('jsonPreview').value);
+  } catch (err) {
+    showStatus('Invalid JSON: ' + err.message, false);
+    return;
+  }
+  if (!Array.isArray(parsed.models)) {
+    showStatus('Invalid JSON: "models" must be an array.', false);
+    return;
+  }
+  if (typeof parsed.management_key !== 'string') {
+    showStatus('Invalid JSON: "management_key" must be a string (use "" if unset).', false);
+    return;
+  }
+  state.config = {
+    enabled: parsed.enabled,
+    priority: parsed.priority,
+    management_key: parsed.management_key,
+    models: parsed.models.map(m => ({ id: m.id, display_name: m.display_name, hidden: m.hidden }))
+  };
+  hydrateState();
+  showStatus('Applied JSON to the editor. Click Save Changes to persist.', true);
+}
+
+async function copyJSON() {
+  const el = document.getElementById('jsonPreview');
   el.select();
   await navigator.clipboard.writeText(el.value);
-  showStatus('Copied YAML snippet to clipboard.', true);
+  showStatus('Copied JSON to clipboard.', true);
 }
 
 function authHeaders() {
-  const key = (document.getElementById('mgmtKey').value || detectStoredManagementKey() || '').trim();
+  const typedKey = document.getElementById('mgmtKey').value.trim();
+  const key = typedKey || state.config.management_key.trim();
   const headers = { 'Content-Type': 'application/json' };
   if (key) {
     headers['Authorization'] = 'Bearer ' + key;
@@ -1161,6 +1118,9 @@ async function refreshFromServer(silent) {
     state = await resp.json();
     hydrateState();
     if (!silent) showStatus('Refreshed model catalog from server.', true);
+    if (!state.config.management_key) {
+      showStatus('Models refreshed. Add management_key: "<your key>" under plugins.configs.model-list-tweaker in config.yaml so the editor can save and refresh models without typing the key.', false);
+    }
   } catch (err) {
     showStatus('Failed to load state: ' + err.message, false);
   }

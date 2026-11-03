@@ -1,4 +1,4 @@
-# CLIProxyAPI Model List Tweaker Plugin
+# Model Renamer/Reorderer
 
 This ABI v1 plugin lets you **reorder**, **rename** (`display_name`), and **hide** models in the global model catalog across Claude Code (`/model`), OpenAI (`/v1/models`), Codex (`/v1/models?client_version=...`), Gemini (`/v1beta/models`), and Grok clients — with a built-in drag-and-drop web editor in the CLIProxyAPI Management UI.
 
@@ -31,6 +31,7 @@ plugins:
     model-list-tweaker:
       enabled: true
       priority: 100
+      management_key: "your-management-key"
       models:
         - id: "gpt-5.4"
           display_name: "Codex 5.4"
@@ -42,15 +43,4 @@ plugins:
           hidden: true
 ```
 
-## Remaining quota in display names
-
-With `quota.enabled`, display names get the remaining quota appended, e.g. `Claude Opus 4.7 (63%)`. Per credential the lowest bucket (5h, weekly, ...) counts; models served by several credentials show the average. Values come from the management API (`POST /v0/management/quota/fetch`), so a management key is required. A catalog request older than `refresh_minutes` since the last refresh triggers a background refresh and is served from the previous snapshot. Models without a quota provider get no suffix.
-
-```yaml
-    model-list-tweaker:
-      quota:
-        enabled: true
-        management_url: "http://127.0.0.1:8317"
-        management_key: "your-management-key"
-        refresh_minutes: 5
-```
+The admin key is read from the plugin config (`management_key`), and the editor shows the full config as an editable JSON panel.
