@@ -110,9 +110,12 @@ func handleManagement(raw []byte) ([]byte, error) {
 				nextCfg = normalizeConfig(nextCfg)
 				setPluginConfig(nextCfg)
 			}
-			return okEnvelope(jsonManagementResponse(http.StatusOK, buildUIState(req.HostCallbackID)))
 		}
-		return okEnvelope(jsonManagementResponse(http.StatusOK, buildUIState(req.HostCallbackID)))
+		uiState, errState := buildUIState(req.HostCallbackID)
+		if errState != nil {
+			return nil, errState
+		}
+		return okEnvelope(jsonManagementResponse(http.StatusOK, uiState))
 	}
 
 	// /v0/resource/plugins/model-list-tweaker/ui serves only the static UI asset.
@@ -126,29 +129,31 @@ func handleManagement(raw []byte) ([]byte, error) {
 	})
 }
 
-func buildUIState(hostCallbackID string) uiStatePayload {
+func buildUIState(hostCallbackID string) (uiStatePayload, error) {
 	cfg := currentConfig()
 	byID := make(map[string]*discoveredModel)
 
-	if credentials, errFetch := hostModelsResolver(hostCallbackID); errFetch == nil {
-		for _, cred := range credentials {
-			prov := strings.ToLower(strings.TrimSpace(cred.Provider))
-			for _, m := range cred.Models {
-				id := strings.TrimSpace(m)
-				if id == "" {
-					continue
+	credentials, errFetch := hostModelsResolver(hostCallbackID)
+	if errFetch != nil {
+		return uiStatePayload{}, fmt.Errorf("fetch host auth models: %w", errFetch)
+	}
+	for _, cred := range credentials {
+		prov := strings.ToLower(strings.TrimSpace(cred.Provider))
+		for _, m := range cred.Models {
+			id := strings.TrimSpace(m)
+			if id == "" {
+				continue
+			}
+			entry := byID[id]
+			if entry == nil {
+				entry = &discoveredModel{
+					ID:          id,
+					DisplayName: id,
 				}
-				entry := byID[id]
-				if entry == nil {
-					entry = &discoveredModel{
-						ID:          id,
-						DisplayName: id,
-					}
-					byID[id] = entry
-				}
-				if prov != "" && !containsString(entry.Providers, prov) {
-					entry.Providers = append(entry.Providers, prov)
-				}
+				byID[id] = entry
+			}
+			if prov != "" && !containsString(entry.Providers, prov) {
+				entry.Providers = append(entry.Providers, prov)
 			}
 		}
 	}
@@ -173,6 +178,9 @@ func buildUIState(hostCallbackID string) uiStatePayload {
 
 	available := make([]discoveredModel, 0, len(byID))
 	for _, item := range byID {
+		if len(item.Providers) == 0 {
+			continue
+		}
 		sort.Strings(item.Providers)
 		if item.DisplayName == "" {
 			item.DisplayName = item.ID
@@ -190,7 +198,7 @@ func buildUIState(hostCallbackID string) uiStatePayload {
 		Config:         cfg,
 		Available:      available,
 		ClaudeCloaking: lastClaudeCloakingVal.Load(),
-	}
+	}, nil
 }
 
 func containsString(list []string, target string) bool {
@@ -842,8 +850,9 @@ function renderAll() {
 }
 
 function renderCounts() {
-  const total = state.config.models.length;
-  const hidden = state.config.models.filter(r => !!r.hidden).length;
+  const provided = state.config.models.filter(r => isProvided(r.id));
+  const total = provided.length;
+  const hidden = provided.filter(r => !!r.hidden).length;
   document.getElementById('totalCount').textContent = String(total);
   document.getElementById('hiddenCount').textContent = String(hidden);
   document.getElementById('visibleCount').textContent = String(total - hidden);
@@ -854,23 +863,25 @@ function defaultDisplayNameFor(id) {
   return found && found.display_name ? found.display_name : id;
 }
 
+// Config rules can reference models no current provider serves; those stay saved but are not shown.
+function isProvided(id) {
+  return state.available.some(a => a.id.toLowerCase() === (id || '').toLowerCase());
+}
+
 function providersFor(id) {
   const found = state.available.find(a => a.id.toLowerCase() === (id || '').toLowerCase());
-  // Config rules can reference models no current credential serves, and models only seen in
-  // catalog responses without owned_by come back with providers: null. Both have no provider.
-  return found && found.providers ? found.providers : [];
+  return found ? found.providers : [];
 }
 
 function providerBadges(id) {
-  const providers = providersFor(id);
-  if (providers.length === 0) return '<span class="badge builtin" title="Not served by any current credential">not discovered</span>';
-  return providers.map(p => '<span class="badge">' + escHTML(p) + '</span>').join(' ');
+  return providersFor(id).map(p => '<span class="badge">' + escHTML(p) + '</span>').join(' ');
 }
 
 function visibleRules() {
   const filter = (document.getElementById('filterInput').value || '').toLowerCase().trim();
-  if (!filter) return state.config.models;
   return state.config.models.filter(rule => {
+    if (!isProvided(rule.id)) return false;
+    if (!filter) return true;
     const defName = defaultDisplayNameFor(rule.id);
     const text = ((rule.id || '') + ' ' + (rule.display_name || '') + ' ' + defName + ' ' + providersFor(rule.id).join(' ')).toLowerCase();
     return text.includes(filter);
@@ -903,6 +914,7 @@ function renderRulesTable() {
   tbody.innerHTML = '';
 
   state.config.models.forEach((rule, idx) => {
+    if (!isProvided(rule.id)) return;
     const defName = defaultDisplayNameFor(rule.id);
     const text = ((rule.id || '') + ' ' + (rule.display_name || '') + ' ' + defName + ' ' + providersFor(rule.id).join(' ')).toLowerCase();
     if (filter && !text.includes(filter)) return;
@@ -975,7 +987,7 @@ function renderPreview() {
 
   for (const r of state.config.models) {
     const id = (r.id || '').trim();
-    if (!id || r.hidden) continue;
+    if (!id || r.hidden || !isProvided(id)) continue;
     const defName = defaultDisplayNameFor(id);
     const effectiveID = cloak ? cloakClaudeID(id) : id;
     const effectiveName = (r.display_name || '').trim() || defName;
