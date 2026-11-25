@@ -123,8 +123,10 @@ type observedModelMeta struct {
 var (
 	activeConfig atomic.Value
 
-	observedMu            sync.RWMutex
-	observedModels        = make(map[string]observedModelMeta)
+	observedMu sync.RWMutex
+	// observedModels holds the latest catalog per source format; a new response replaces the
+	// previous one so models removed by the host (exclusions, deleted credentials) drop out.
+	observedModels        = make(map[string]map[string]observedModelMeta)
 	lastClaudeCloakingVal atomic.Bool
 
 	hostModelsResolver = fetchHostAuthModels
@@ -326,7 +328,7 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 		items = append(items, cloneMap(itemMap))
 	}
 
-	recordObservedModels(items)
+	recordObservedModels(sourceFormat, items)
 
 	isClaudeFormat := strings.EqualFold(strings.TrimSpace(sourceFormat), "claude") || hasClaudePaginationFields(root)
 	claudeCloakingActive := detectClaudeCloaking(items, isClaudeFormat)
@@ -399,30 +401,26 @@ func transformCatalogBody(sourceFormat string, body []byte, cfg pluginConfig) ([
 	return out, true
 }
 
-func recordObservedModels(items []map[string]any) {
+func recordObservedModels(sourceFormat string, items []map[string]any) {
 	if len(items) == 0 {
 		return
 	}
-	observedMu.Lock()
-	defer observedMu.Unlock()
+	observed := make(map[string]observedModelMeta, len(items))
 	for _, item := range items {
 		canonicalID, _, displayName := extractItemIdentifiers(item)
 		if canonicalID == "" {
 			continue
 		}
 		ownedBy, _ := item["owned_by"].(string)
-		existing := observedModels[canonicalID]
-		if displayName != "" && displayName != canonicalID {
-			existing.DisplayName = displayName
-		} else if existing.DisplayName == "" {
-			existing.DisplayName = canonicalID
+		meta := observedModelMeta{ID: canonicalID, DisplayName: canonicalID, OwnedBy: ownedBy}
+		if displayName != "" {
+			meta.DisplayName = displayName
 		}
-		if ownedBy != "" {
-			existing.OwnedBy = ownedBy
-		}
-		existing.ID = canonicalID
-		observedModels[canonicalID] = existing
+		observed[canonicalID] = meta
 	}
+	observedMu.Lock()
+	defer observedMu.Unlock()
+	observedModels[strings.ToLower(sourceFormat)] = observed
 }
 
 func extractItemIdentifiers(item map[string]any) (canonicalID, rawID, displayName string) {

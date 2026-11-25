@@ -159,19 +159,21 @@ func buildUIState(hostCallbackID string) (uiStatePayload, error) {
 	}
 
 	observedMu.RLock()
-	for id, meta := range observedModels {
-		entry := byID[id]
-		if entry == nil {
-			entry = &discoveredModel{
-				ID:          id,
-				DisplayName: meta.DisplayName,
+	for _, formatModels := range observedModels {
+		for id, meta := range formatModels {
+			entry := byID[id]
+			if entry == nil {
+				entry = &discoveredModel{
+					ID:          id,
+					DisplayName: meta.DisplayName,
+				}
+				byID[id] = entry
+			} else if meta.DisplayName != "" && (entry.DisplayName == "" || entry.DisplayName == entry.ID) {
+				entry.DisplayName = meta.DisplayName
 			}
-			byID[id] = entry
-		} else if meta.DisplayName != "" && (entry.DisplayName == "" || entry.DisplayName == entry.ID) {
-			entry.DisplayName = meta.DisplayName
-		}
-		if meta.OwnedBy != "" && len(entry.Providers) == 0 {
-			entry.Providers = []string{meta.OwnedBy}
+			if meta.OwnedBy != "" && len(entry.Providers) == 0 {
+				entry.Providers = []string{meta.OwnedBy}
+			}
 		}
 	}
 	observedMu.RUnlock()
